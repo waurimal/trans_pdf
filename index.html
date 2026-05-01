@@ -1,0 +1,378 @@
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { Upload, FileText, Languages, Download, CheckCircle, AlertCircle, Loader2, File, ChevronRight, RefreshCw } from 'lucide-react';
+
+// 시스템에서 런타임에 제공하는 API 키
+const apiKey = ""; 
+
+export default function App() {
+  const [isPdfReady, setIsPdfReady] = useState(false);
+  const [file, setFile] = useState(null);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [progressStatus, setProgressStatus] = useState('');
+  const [results, setResults] = useState([]); // [{ page: 1, originalImage: "...", translated: "...", status: "pending|translating|done|error" }]
+  const [error, setError] = useState('');
+  const [domain, setDomain] = useState('일반'); // 분야 상태 추가
+  const fileInputRef = useRef(null);
+
+  // 선택 가능한 전문 분야 목록
+  const domains = ['일반', 'IT/소프트웨어', '의학/보건', '법률/행정', '경제/경영', '기계/공학', '자연과학', '인문/예술', '교육학'];
+
+  // PDF.js 라이브러리 로드
+  useEffect(() => {
+    const loadPdfJs = async () => {
+      try {
+        const script = document.createElement('script');
+        script.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
+        script.onload = () => {
+          window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+          setIsPdfReady(true);
+        };
+        script.onerror = () => {
+          setError("PDF 처리 라이브러리를 불러오는데 실패했습니다. 인터넷 연결을 확인해주세요.");
+        };
+        document.body.appendChild(script);
+      } catch (err) {
+        setError("초기화 중 오류가 발생했습니다.");
+      }
+    };
+    loadPdfJs();
+  }, []);
+
+  // Gemini API 번역 호출 함수 (텍스트 추출 -> 이미지 시각 분석 방식으로 변경)
+  const translatePageImage = async (base64Image, currentDomain, previousContext = "", retries = 5) => {
+    if (!base64Image) return '';
+    
+    const delays = [1000, 2000, 4000, 8000, 16000];
+    const base64Data = base64Image.split(',')[1];
+    
+    const contextPrompt = previousContext 
+      ? `\n\n[이전 페이지 문맥 참고]\n이전 페이지의 마지막 번역 내용은 다음과 같습니다:\n"... ${previousContext}"\n\n*중요: 이전 페이지에서 문장이 마침표로 끝나지 않고 끊어졌다면, 현재 페이지의 첫 부분과 자연스럽게 연결하여 하나의 완성된 문장으로 번역하세요. 완성된 번역 결과는 현재 페이지 번역의 맨 처음에 위치하게 하세요.*`
+      : "";
+
+    for (let i = 0; i < retries; i++) {
+      try {
+        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{ 
+              parts: [
+                { text: `다음 문서 이미지를 한국어로 번역해주세요. \n\n[전문 분야: ${currentDomain}]${contextPrompt}\n\n지시사항:\n1. 지정된 전문 분야에서 가장 널리 사용되는 자연스러운 용어를 사용하세요.\n2. 문서에 표(Table)가 있다면, 텍스트 표 형식(| 항목 | 내용 |)을 사용하여 구조를 최대한 원본과 동일하게 재현하세요.\n3. 문서에 그림, 그래프, 로고 등이 있다면 해당 위치에 [그림: (내용 간략 설명)] 형태로 표시하고, 그림 내부에 있는 텍스트나 캡션도 모두 번역하세요.\n4. 전체적인 문단 배치나 줄바꿈 등의 포맷팅을 원본 문서와 최대한 유사하게 유지하세요.\n5. 페이지 구분으로 인해 잘린 문장은 현재 페이지 번역 시작 부분에서 매끄럽게 완성해주세요.` },
+                { inlineData: { mimeType: "image/jpeg", data: base64Data } }
+              ] 
+            }],
+            systemInstruction: { 
+              parts: [{ text: "You are a professional translator specializing in English to Korean translation. You accurately extract and translate text from document images while maintaining structural formatting like tables. You are skilled at connecting sentences broken across pages." }] 
+            }
+          })
+        });
+
+        if (!response.ok) throw new Error(`API Error: ${response.status}`);
+        
+        const result = await response.json();
+        return result.candidates?.[0]?.content?.parts?.[0]?.text || "번역 결과를 가져오지 못했습니다.";
+      } catch (err) {
+        if (i === retries - 1) throw err;
+        await new Promise(resolve => setTimeout(resolve, delays[i]));
+      }
+    }
+  };
+
+  const handleFileUpload = async (uploadedFile) => {
+    if (!uploadedFile || uploadedFile.type !== 'application/pdf') {
+      setError("PDF 파일만 업로드 가능합니다.");
+      return;
+    }
+    
+    if (!isPdfReady) {
+      setError("PDF 엔진이 아직 준비되지 않았습니다. 잠시 후 다시 시도해주세요.");
+      return;
+    }
+
+    setFile(uploadedFile);
+    setError('');
+    setIsProcessing(true);
+    setResults([]);
+    setProgressStatus('PDF 파일을 분석 중입니다...');
+
+    try {
+      const arrayBuffer = await uploadedFile.arrayBuffer();
+      const pdf = await window.pdfjsLib.getDocument(arrayBuffer).promise;
+      const numPages = pdf.numPages;
+      
+      const initialResults = Array.from({ length: numPages }, (_, i) => ({
+        page: i + 1,
+        originalImage: '',
+        translated: '',
+        status: 'pending' // pending, extracting, translating, done, error
+      }));
+      setResults(initialResults);
+
+      let previousContext = ""; // 이전 페이지의 문맥을 저장할 변수
+
+      for (let i = 1; i <= numPages; i++) {
+        // 시각적 이미지 캡처 단계 업데이트
+        setResults(prev => prev.map(r => r.page === i ? { ...r, status: 'extracting' } : r));
+        setProgressStatus(`페이지 ${i}/${numPages} 시각적 분석 중...`);
+        
+        const page = await pdf.getPage(i);
+        
+        // PDF 페이지를 고해상도 Canvas 이미지로 변환 (표와 그림의 배치를 AI가 볼 수 있게 함)
+        const viewport = page.getViewport({ scale: 1.5 });
+        const canvas = document.createElement('canvas');
+        const context = canvas.getContext('2d');
+        canvas.height = viewport.height;
+        canvas.width = viewport.width;
+        
+        await page.render({ canvasContext: context, viewport: viewport }).promise;
+        const base64Image = canvas.toDataURL('image/jpeg', 0.8);
+        
+        // 추출 결과 저장 및 번역 단계로 전환
+        setResults(prev => prev.map(r => r.page === i ? { ...r, originalImage: base64Image, status: 'translating' } : r));
+        setProgressStatus(`페이지 ${i}/${numPages} AI 전문 번역 중 (${domain})...`);
+
+        try {
+          const translatedText = await translatePageImage(base64Image, domain, previousContext);
+          setResults(prev => prev.map(r => r.page === i ? { ...r, translated: translatedText, status: 'done' } : r));
+          
+          // 다음 페이지 번역 시 문맥 파악을 위해 현재 번역의 마지막 150자를 저장
+          previousContext = translatedText.slice(-150).trim();
+        } catch (err) {
+          setResults(prev => prev.map(r => r.page === i ? { ...r, translated: '번역 중 오류가 발생했습니다.', status: 'error' } : r));
+          previousContext = ""; // 오류 발생 시 문맥 초기화
+        }
+      }
+      
+      setProgressStatus('모든 처리가 완료되었습니다!');
+    } catch (err) {
+      console.error(err);
+      setError("PDF 파일을 처리하는 중 오류가 발생했습니다. 암호가 걸려있거나 손상된 파일일 수 있습니다.");
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const onDragOver = useCallback((e) => {
+    e.preventDefault();
+    e.stopPropagation();
+  }, []);
+
+  const onDrop = useCallback((e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+      handleFileUpload(e.dataTransfer.files[0]);
+    }
+  }, [isPdfReady]);
+
+  const handleReset = () => {
+    setFile(null);
+    setResults([]);
+    setError('');
+    setProgressStatus('');
+  };
+
+  const downloadText = () => {
+    if (results.length === 0) return;
+    
+    let textContent = `# ${file.name} 번역 결과\n\n`;
+    textContent += `**전문 분야:** ${domain}\n\n---\n\n`;
+    
+    results.forEach(r => {
+      textContent += `## 페이지 ${r.page}\n\n${r.translated}\n\n---\n\n`;
+    });
+
+    const blob = new Blob([textContent], { type: 'text/markdown;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `번역됨_${file.name.replace('.pdf', '')}.md`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  return (
+    <div className="min-h-screen bg-slate-50 text-slate-800 p-4 md:p-8 font-sans">
+      <div className="max-w-6xl mx-auto space-y-6">
+        
+        {/* Header */}
+        <div className="text-center space-y-2">
+          <div className="flex items-center justify-center space-x-3 mb-4">
+            <div className="p-3 bg-blue-600 rounded-2xl shadow-lg shadow-blue-200">
+              <Languages className="w-8 h-8 text-white" />
+            </div>
+            <h1 className="text-3xl md:text-4xl font-bold text-slate-900 tracking-tight">PDF AI 번역기</h1>
+          </div>
+          <p className="text-slate-500 max-w-2xl mx-auto">
+            영어 PDF 파일을 업로드하면 AI가 문맥을 파악하여 자연스러운 한국어로 번역해 줍니다.
+          </p>
+        </div>
+
+        {/* Error Message */}
+        {error && (
+          <div className="bg-red-50 border border-red-200 text-red-700 p-4 rounded-xl flex items-center shadow-sm">
+            <AlertCircle className="w-5 h-5 mr-3 flex-shrink-0" />
+            <p>{error}</p>
+          </div>
+        )}
+
+        {/* Upload Area */}
+        {!file && (
+          <div className="mt-8 space-y-6">
+            <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
+              <label className="block text-sm font-semibold text-slate-700 mb-3">번역할 문서의 전문 분야를 선택하세요</label>
+              <div className="flex flex-wrap gap-2">
+                {domains.map(d => (
+                  <button
+                    key={d}
+                    onClick={() => setDomain(d)}
+                    className={`px-4 py-2 rounded-full text-sm font-medium transition-colors ${
+                      domain === d 
+                        ? 'bg-blue-600 text-white shadow-md' 
+                        : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                    }`}
+                  >
+                    {d}
+                  </button>
+                ))}
+              </div>
+              <p className="text-xs text-slate-500 mt-3">* 선택한 분야에서 주로 사용하는 전문 용어를 반영하여 번역합니다.</p>
+            </div>
+
+            <div 
+              className="border-2 border-dashed border-slate-300 bg-white rounded-3xl p-12 text-center cursor-pointer hover:border-blue-500 hover:bg-blue-50 transition-all duration-200 ease-in-out group shadow-sm"
+              onDragOver={onDragOver}
+              onDrop={onDrop}
+              onClick={() => fileInputRef.current?.click()}
+            >
+              <input 
+                type="file" 
+                ref={fileInputRef} 
+                className="hidden" 
+                accept=".pdf"
+                onChange={(e) => e.target.files && handleFileUpload(e.target.files[0])}
+              />
+              <div className="w-20 h-20 mx-auto mb-6 bg-slate-100 group-hover:bg-blue-100 rounded-full flex items-center justify-center transition-colors">
+                <Upload className="w-10 h-10 text-slate-400 group-hover:text-blue-600" />
+              </div>
+              <h3 className="text-xl font-semibold text-slate-700 mb-2">클릭하거나 PDF 파일을 끌어다 놓으세요</h3>
+              <p className="text-slate-500 text-sm">최대 지원 용량: 브라우저 메모리 한도 내</p>
+            </div>
+          </div>
+        )}
+
+        {/* Processing State & Results */}
+        {file && (
+          <div className="space-y-6">
+            
+            {/* Control Panel */}
+            <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200 flex flex-col sm:flex-row justify-between items-center gap-4">
+              <div className="flex items-center space-x-4 w-full sm:w-auto">
+                <div className="w-12 h-12 bg-red-100 text-red-600 rounded-xl flex items-center justify-center flex-shrink-0">
+                  <FileText className="w-6 h-6" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="font-semibold text-slate-800 truncate" title={file.name}>{file.name}</p>
+                  <p className="text-sm text-slate-500">{(file.size / 1024 / 1024).toFixed(2)} MB</p>
+                </div>
+              </div>
+
+              <div className="flex items-center space-x-3 w-full sm:w-auto">
+                {isProcessing && (
+                  <div className="flex items-center text-blue-600 bg-blue-50 px-4 py-2 rounded-lg text-sm font-medium">
+                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    {progressStatus}
+                  </div>
+                )}
+                {!isProcessing && results.length > 0 && (
+                  <button 
+                    onClick={downloadText}
+                    className="flex-1 sm:flex-none flex items-center justify-center px-5 py-2.5 bg-slate-900 text-white rounded-xl hover:bg-slate-800 transition-colors shadow-md text-sm font-medium"
+                  >
+                    <Download className="w-4 h-4 mr-2" />
+                    번역본 저장 (.md)
+                  </button>
+                )}
+                <button 
+                  onClick={handleReset}
+                  disabled={isProcessing}
+                  className="p-2.5 border border-slate-200 text-slate-600 rounded-xl hover:bg-slate-100 disabled:opacity-50 transition-colors"
+                  title="새로운 파일 업로드"
+                >
+                  <RefreshCw className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+
+            {/* Translation Results */}
+            {results.length > 0 && (
+              <div className="space-y-4">
+                {results.map((result) => (
+                  <div key={result.page} className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden flex flex-col">
+                    <div className="bg-slate-50 px-5 py-3 border-b border-slate-200 flex items-center justify-between">
+                      <span className="font-semibold text-slate-700 flex items-center">
+                        <File className="w-4 h-4 mr-2 text-slate-400" />
+                        페이지 {result.page}
+                      </span>
+                      {result.status === 'pending' && <span className="text-xs font-medium text-slate-400">대기 중</span>}
+                      {result.status === 'extracting' && <span className="text-xs font-medium text-amber-600 flex items-center"><Loader2 className="w-3 h-3 mr-1 animate-spin" />텍스트 추출 중</span>}
+                      {result.status === 'translating' && <span className="text-xs font-medium text-blue-600 flex items-center"><Loader2 className="w-3 h-3 mr-1 animate-spin" />AI 번역 중</span>}
+                      {result.status === 'done' && <span className="text-xs font-medium text-green-600 flex items-center"><CheckCircle className="w-3 h-3 mr-1" />완료됨</span>}
+                      {result.status === 'error' && <span className="text-xs font-medium text-red-600 flex items-center"><AlertCircle className="w-3 h-3 mr-1" />오류</span>}
+                    </div>
+                    
+                    <div className="grid grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-slate-100">
+                      {/* Original PDF Page Image */}
+                      <div className="p-5 md:p-6 bg-slate-50/50">
+                        <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">Original Page</h4>
+                        <div className="rounded-xl overflow-hidden border border-slate-200 shadow-sm bg-white">
+                          {result.status === 'pending' || result.status === 'extracting' ? (
+                            <div className="flex items-center justify-center h-64 bg-slate-100">
+                              <Loader2 className="w-8 h-8 text-slate-300 animate-spin" />
+                            </div>
+                          ) : (
+                            result.originalImage ? (
+                              <img src={result.originalImage} alt={`Page ${result.page}`} className="w-full h-auto object-contain" />
+                            ) : (
+                              <div className="p-4 text-sm text-slate-400 italic">이미지를 불러올 수 없습니다.</div>
+                            )
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Translated Korean Text */}
+                      <div className="p-5 md:p-6 bg-white relative">
+                        <h4 className="text-xs font-bold text-blue-500 uppercase tracking-wider mb-3">Translated ({domain})</h4>
+                        <div className="prose prose-slate prose-sm max-w-none text-slate-800">
+                           {result.status === 'pending' || result.status === 'extracting' || result.status === 'translating' ? (
+                            <div className="flex flex-col space-y-2 animate-pulse">
+                              <div className="h-4 bg-slate-200 rounded w-full"></div>
+                              <div className="h-4 bg-slate-200 rounded w-5/6"></div>
+                              <div className="h-4 bg-slate-200 rounded w-4/5"></div>
+                            </div>
+                          ) : (
+                            <p className="whitespace-pre-wrap font-sans leading-relaxed text-[15px]">
+                              {result.translated || <span className="italic text-slate-400">번역 결과가 없습니다.</span>}
+                            </p>
+                          )}
+                        </div>
+                        
+                        {/* Status Icon Overlay for Desktop visual connection */}
+                        <div className="hidden md:flex absolute top-1/2 -left-3 -mt-3 w-6 h-6 bg-white border border-slate-200 rounded-full items-center justify-center z-10 shadow-sm text-slate-300">
+                           <ChevronRight className="w-4 h-4" />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+      </div>
+    </div>
+  );
+}
