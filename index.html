@@ -46,21 +46,19 @@
       const domains = ['일반', 'IT/소프트웨어', '의학/보건', '법률/행정', '경제/경영', '기계/공학', '자연과학', '인문/예술', '교육학'];
 
       const handleApiKeySubmit = (e) => {
-        e.preventDefault();
+        if (e) e.preventDefault();
         if (tempApiKey.trim()) {
           setUserApiKey(tempApiKey.trim());
           setIsApiKeySet(true);
+          setError(''); // API 키 저장 시 기존 에러 메시지 초기화
         }
       };
 
       const handleApiKeyReset = () => {
-        if (window.confirm("API 키를 초기화하시겠습니까? 진행 중인 데이터가 초기화됩니다.")) {
+        if (window.confirm("API 키를 초기화하시겠습니까?")) {
           setUserApiKey('');
           setTempApiKey('');
           setIsApiKeySet(false);
-          setFile(null);
-          setResults([]);
-          setError('');
         }
       };
 
@@ -108,7 +106,7 @@
 
       const handleFileUpload = async (uploadedFile) => {
         if (!userApiKey) {
-          setError("API 키를 먼저 입력해야 작동합니다.");
+          setError("API 키를 먼저 저장(입력)해야 작동합니다.");
           return;
         }
         if (!uploadedFile || uploadedFile.type !== 'application/pdf') {
@@ -185,7 +183,7 @@
         if (e.dataTransfer.files && e.dataTransfer.files[0]) {
           handleFileUpload(e.dataTransfer.files[0]);
         }
-      }, []);
+      }, [userApiKey]); // 의존성 배열에 userApiKey 추가
 
       const handleReset = () => {
         setFile(null);
@@ -215,60 +213,13 @@
         URL.revokeObjectURL(url);
       };
 
-      // 화면 1: API 키 입력 화면
-      if (!isApiKeySet) {
-        return (
-          <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
-            <div className="bg-white max-w-md w-full p-8 rounded-3xl shadow-lg border border-slate-200 text-center">
-              <div className="w-16 h-16 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-6">
-                <Key className="w-8 h-8 text-blue-600" />
-              </div>
-              <h2 className="text-2xl font-bold text-slate-800 mb-2">API 키 설정</h2>
-              <p className="text-slate-500 text-sm mb-3">
-                Google AI Studio에서 발급받은 Gemini API 키를 입력해주세요. 키는 브라우저 내에만 임시로 저장되며 서버로 전송되지 않습니다.
-              </p>
-              <p className="text-red-500 font-medium text-sm mb-8 bg-red-50 p-3 rounded-xl border border-red-100">
-                * 반드시 구글 AI Studio에서 발급받은 Gemini API 키를 사용해야 합니다.
-              </p>
-              
-              <form onSubmit={handleApiKeySubmit} className="space-y-4">
-                <input
-                  type="password"
-                  placeholder="AIzaSy..."
-                  value={tempApiKey}
-                  onChange={(e) => setTempApiKey(e.target.value)}
-                  className="w-full px-4 py-3 rounded-xl border border-slate-300 focus:border-blue-500 focus:ring-2 focus:ring-blue-200 outline-none transition-all"
-                  required
-                />
-                <button
-                  type="submit"
-                  disabled={!tempApiKey.trim()}
-                  className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 text-white font-semibold py-3 rounded-xl transition-colors shadow-md"
-                >
-                  시작하기
-                </button>
-              </form>
-            </div>
-          </div>
-        );
-      }
-
-      // 화면 2: 메인 PDF 번역 화면
+      // 단일 메인 화면
       return (
         <div className="min-h-screen p-4 md:p-8">
           <div className="max-w-6xl mx-auto space-y-6">
             
-            {/* Header & API Key Reset */}
-            <div className="relative text-center space-y-2 mb-10">
-              <button 
-                onClick={handleApiKeyReset}
-                className="absolute right-0 top-0 mt-2 flex items-center text-sm text-slate-400 hover:text-slate-600 transition-colors"
-                title="API 키 초기화"
-              >
-                <LogOut className="w-4 h-4 mr-1" />
-                키 초기화
-              </button>
-
+            {/* Header */}
+            <div className="text-center space-y-2 mb-10">
               <div className="flex items-center justify-center space-x-3 mb-4">
                 <div className="p-3 bg-blue-600 rounded-2xl shadow-lg shadow-blue-200">
                   <Languages className="w-8 h-8 text-white" />
@@ -288,11 +239,54 @@
               </div>
             )}
 
-            {/* Upload Area */}
+            {/* 초기 설정 및 업로드 영역 (파일이 없을 때만 표시) */}
             {!file && (
               <div className="mt-8 space-y-6">
+                
+                {/* 1. API Key Input */}
                 <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
-                  <label className="block text-sm font-semibold text-slate-700 mb-3">번역할 문서의 전문 분야를 선택하세요</label>
+                  <div className="w-full">
+                    <label className="block text-sm font-semibold text-slate-700 mb-1 flex items-center">
+                      <Key className="w-4 h-4 mr-2 text-blue-500" />
+                      1. API 키 설정
+                    </label>
+                    <p className="text-xs text-slate-500 mb-3">
+                      * 반드시 구글 AI Studio에서 발급받은 Gemini API 키를 사용해야 합니다. (서버 전송 없이 브라우저에 임시 저장됨)
+                    </p>
+                    <form onSubmit={handleApiKeySubmit} className="flex space-x-2">
+                      <input
+                        type="password"
+                        placeholder="AIzaSy..."
+                        value={tempApiKey}
+                        onChange={(e) => setTempApiKey(e.target.value)}
+                        disabled={isApiKeySet}
+                        className="flex-1 px-4 py-2.5 text-sm rounded-xl border border-slate-300 focus:border-blue-500 focus:ring-2 focus:ring-blue-200 outline-none transition-all disabled:bg-slate-50 disabled:text-slate-400"
+                      />
+                      {!isApiKeySet ? (
+                        <button
+                          type="submit"
+                          disabled={!tempApiKey.trim()}
+                          className="px-6 py-2.5 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 text-white text-sm font-semibold rounded-xl transition-colors shadow-sm whitespace-nowrap"
+                        >
+                          저장
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={handleApiKeyReset}
+                          className="px-6 py-2.5 border border-slate-200 text-slate-600 hover:bg-slate-100 text-sm font-semibold rounded-xl transition-colors shadow-sm whitespace-nowrap flex items-center"
+                        >
+                          <LogOut className="w-4 h-4 mr-1" />
+                          변경
+                        </button>
+                      )}
+                    </form>
+                  </div>
+                </div>
+
+                {/* 2. Domain Selection */}
+                <div className={`bg-white p-6 rounded-3xl border border-slate-200 shadow-sm transition-opacity ${!isApiKeySet ? 'opacity-50 pointer-events-none' : ''}`}>
+                  <label className="block text-sm font-semibold text-slate-700 mb-3">2. 번역할 문서의 전문 분야 선택</label>
                   <div className="flex flex-wrap gap-2">
                     {domains.map(d => (
                       <button
@@ -311,11 +305,16 @@
                   <p className="text-xs text-slate-500 mt-3">* 선택한 분야에서 주로 사용하는 전문 용어를 반영하여 번역합니다.</p>
                 </div>
 
+                {/* 3. File Upload Area */}
                 <div 
-                  className="border-2 border-dashed border-slate-300 bg-white rounded-3xl p-12 text-center cursor-pointer hover:border-blue-500 hover:bg-blue-50 transition-all duration-200 ease-in-out group shadow-sm"
+                  className={`border-2 border-dashed bg-white rounded-3xl p-12 text-center transition-all duration-200 ease-in-out group shadow-sm ${
+                    !isApiKeySet 
+                      ? 'border-slate-200 opacity-50 cursor-not-allowed' 
+                      : 'border-slate-300 cursor-pointer hover:border-blue-500 hover:bg-blue-50'
+                  }`}
                   onDragOver={onDragOver}
                   onDrop={onDrop}
-                  onClick={() => fileInputRef.current?.click()}
+                  onClick={() => isApiKeySet && fileInputRef.current?.click()}
                 >
                   <input 
                     type="file" 
@@ -323,17 +322,22 @@
                     className="hidden" 
                     accept=".pdf"
                     onChange={(e) => e.target.files && handleFileUpload(e.target.files[0])}
+                    disabled={!isApiKeySet}
                   />
-                  <div className="w-20 h-20 mx-auto mb-6 bg-slate-100 group-hover:bg-blue-100 rounded-full flex items-center justify-center transition-colors">
-                    <Upload className="w-10 h-10 text-slate-400 group-hover:text-blue-600" />
+                  <div className={`w-20 h-20 mx-auto mb-6 rounded-full flex items-center justify-center transition-colors ${
+                    !isApiKeySet ? 'bg-slate-50' : 'bg-slate-100 group-hover:bg-blue-100'
+                  }`}>
+                    <Upload className={`w-10 h-10 ${!isApiKeySet ? 'text-slate-300' : 'text-slate-400 group-hover:text-blue-600'}`} />
                   </div>
-                  <h3 className="text-xl font-semibold text-slate-700 mb-2">클릭하거나 PDF 파일을 끌어다 놓으세요</h3>
+                  <h3 className="text-xl font-semibold text-slate-700 mb-2">
+                    {isApiKeySet ? '3. 클릭하거나 PDF 파일을 끌어다 놓으세요' : 'API 키를 먼저 저장해 주세요'}
+                  </h3>
                   <p className="text-slate-500 text-sm">최대 지원 용량: 브라우저 메모리 한도 내</p>
                 </div>
               </div>
             )}
 
-            {/* Processing State & Results */}
+            {/* Processing State & Results (파일 업로드 후 표시) */}
             {file && (
               <div className="space-y-6">
                 
