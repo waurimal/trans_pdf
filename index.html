@@ -81,8 +81,17 @@
 
       const handleApiKeySubmit = (e) => {
         if (e) e.preventDefault();
-        setUserApiKey(tempApiKey.trim()); 
-        setSelectedModel(tempModel);
+        const key = tempApiKey.trim();
+        setUserApiKey(key); 
+        
+        // API 키가 비어있다면 Canvas 내부 테스트로 간주하여 강제로 지원되는 2.5 Preview 모델로 고정
+        if (!key) {
+          setSelectedModel('gemini-2.5-flash-preview-09-2025');
+          setTempModel('gemini-2.5-flash-preview-09-2025');
+        } else {
+          setSelectedModel(tempModel);
+        }
+        
         setIsApiKeySet(true);
         setError(''); 
       };
@@ -128,7 +137,13 @@
               let detailedError = `HTTP ${response.status}`;
               try {
                 const errJson = JSON.parse(errText);
-                if (errJson.error && errJson.error.message) detailedError += `: ${errJson.error.message}`;
+                if (errJson.error && errJson.error.message) {
+                  detailedError += `: ${errJson.error.message}`;
+                  // API 키 없이 404 에러가 났을 때의 상세 안내 추가
+                  if (detailedError.includes('404') && !userApiKey) {
+                    detailedError += "\n\n(안내: Canvas 환경에서는 외부 배포용 모델을 사용할 수 없습니다. 모델을 '2.5 Flash Preview'로 변경해주세요.)";
+                  }
+                }
               } catch(e) { detailedError += ` - ${errText.substring(0, 100)}`; }
               throw new Error(detailedError);
             }
@@ -480,14 +495,6 @@
                         번역본 저장 (.md)
                       </button>
                     )}
-                    <button 
-                      onClick={handleReset}
-                      disabled={isProcessing}
-                      className="p-2.5 border border-slate-200 text-slate-600 rounded-xl hover:bg-slate-100 disabled:opacity-50 transition-colors"
-                      title="새로운 파일 업로드"
-                    >
-                      <RefreshCw className="w-5 h-5" />
-                    </button>
                   </div>
                 </div>
 
@@ -550,6 +557,19 @@
                         </div>
                       </div>
                     ))}
+                    
+                    {/* 처음으로 돌아가기 버튼 (번역 완료 후 표시) */}
+                    {!isProcessing && (
+                      <div className="flex justify-center mt-8 pb-8">
+                        <button 
+                          onClick={handleReset}
+                          className="flex items-center px-6 py-3 bg-white border border-slate-300 text-slate-700 hover:bg-slate-50 font-semibold rounded-xl transition-colors shadow-sm"
+                        >
+                          <RefreshCw className="w-5 h-5 mr-2 text-slate-500" />
+                          처음 화면으로 돌아가기
+                        </button>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
