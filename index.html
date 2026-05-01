@@ -8,47 +8,53 @@
   <!-- 1. Tailwind CSS -->
   <script src="https://cdn.tailwindcss.com"></script>
   
-  <!-- 2. PDF.js (브라우저에서 직접 PDF 추출용) -->
+  <!-- 2. PDF.js -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
   <script>
-    // PDF 엔진 초기화
     window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
   </script>
 
-  <!-- 3. Babel (브라우저에서 React JSX 문법을 즉시 변환) -->
+  <!-- 3. Babel -->
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <!-- 4. marked.js (마크다운 → HTML 렌더링) -->
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+
+  <!-- 5. docx.js (Word 문서 생성) -->
+  <script src="https://unpkg.com/docx@8.5.0/build/index.umd.js"></script>
 </head>
 <body class="bg-slate-50 text-slate-800 font-sans antialiased">
   <div id="root"></div>
 
-  <!-- React 애플리케이션 코드 -->
   <script type="text/babel" data-type="module">
     import React, { useState, useCallback, useRef } from 'https://esm.sh/react@18';
     import { createRoot } from 'https://esm.sh/react-dom@18/client';
-    import { Upload, FileText, Languages, Download, CheckCircle, AlertCircle, Loader2, File, ChevronRight, RefreshCw, Key, LogOut, Settings, Info } from 'https://esm.sh/lucide-react@0.294.0';
+    import { Upload, FileText, Languages, Download, CheckCircle, AlertCircle, Loader2, File, ChevronRight, RefreshCw, Key, LogOut, Settings, Info, ChevronDown } from 'https://esm.sh/lucide-react@0.294.0';
 
-    // --- 헬퍼 함수: AI가 알려준 좌표를 바탕으로 원본 이미지에서 그림만 잘라내기 ---
+    // marked.js 설정
+    if (window.marked) {
+      window.marked.setOptions({
+        breaks: true,
+        gfm: true,
+      });
+    }
+
+    // 이미지 크롭 헬퍼
     const cropImageFromBase64 = (base64Str, y1, x1, y2, x2) => {
-      return new Promise((resolve, reject) => {
+      return new Promise((resolve) => {
         const img = new Image();
         img.onload = () => {
           const canvas = document.createElement('canvas');
           const ctx = canvas.getContext('2d');
           const w = img.width;
           const h = img.height;
-          
           const sy = Math.max(0, (y1 / 1000) * h);
           const sx = Math.max(0, (x1 / 1000) * w);
           const ey = Math.min(h, (y2 / 1000) * h);
           const ex = Math.min(w, (x2 / 1000) * w);
           const sw = ex - sx;
           const sh = ey - sy;
-
-          if (sw <= 0 || sh <= 0) {
-            resolve(null);
-            return;
-          }
-          
+          if (sw <= 0 || sh <= 0) { resolve(null); return; }
           canvas.width = sw;
           canvas.height = sh;
           ctx.drawImage(img, sx, sy, sw, sh, 0, 0, sw, sh);
@@ -63,9 +69,9 @@
       const [userApiKey, setUserApiKey] = useState('');
       const [tempApiKey, setTempApiKey] = useState('');
       
-      // 모델 설정을 더 안정적인 식별자로 관리
-      const [selectedModel, setSelectedModel] = useState('gemini-1.5-flash');
-      const [tempModel, setTempModel] = useState('gemini-1.5-flash');
+      // ✅ 수정: 2025년 5월 기준 실제 사용 가능한 모델로 교체
+      const [selectedModel, setSelectedModel] = useState('gemini-2.5-flash-preview-05-20');
+      const [tempModel, setTempModel] = useState('gemini-2.5-flash-preview-05-20');
       const [isApiKeySet, setIsApiKeySet] = useState(false);
       const [showManualModel, setShowManualModel] = useState(false);
 
@@ -75,33 +81,77 @@
       const [results, setResults] = useState([]);
       const [error, setError] = useState('');
       const [domain, setDomain] = useState('일반');
+      const [showDownloadMenu, setShowDownloadMenu] = useState(false);
       const fileInputRef = useRef(null);
+      const downloadMenuRef = useRef(null);
 
       const domains = ['일반', 'IT/소프트웨어', '의학/보건', '법률/행정', '경제/경영', '기계/공학', '자연과학', '인문/예술', '교육학'];
-      
-      // 최신 구글 API 모델 목록 업데이트
-      const modelOptions = [
-        { id: 'gemini-1.5-flash', name: 'Gemini 1.5 Flash (가장 빠름)' },
-        { id: 'gemini-1.5-pro', name: 'Gemini 1.5 Pro (높은 정확도)' },
-        { id: 'gemini-2.0-flash-exp', name: 'Gemini 2.0 Flash Exp (최신 기능)' },
-        { id: 'gemini-2.5-flash-preview-09-2025', name: 'Gemini 2.5 Preview (Canvas용)' }
-      ];
 
-      const handleApiKeySubmit = (e) => {
+      // 동적으로 로드된 모델 목록 (API 키 입력 후 자동 조회)
+      const [modelOptions, setModelOptions] = useState([
+        { id: 'gemini-2.5-flash-preview-05-20', name: 'Gemini 2.5 Flash Preview (권장)' },
+        { id: 'gemini-2.5-pro-preview-06-05',   name: 'Gemini 2.5 Pro Preview' },
+        { id: 'gemini-3-flash-preview',          name: 'Gemini 3 Flash Preview' },
+        { id: 'gemini-2.5-flash',                name: 'Gemini 2.5 Flash' },
+      ]);
+      const [isLoadingModels, setIsLoadingModels] = useState(false);
+
+      const handleApiKeySubmit = async (e) => {
         if (e) e.preventDefault();
         const key = tempApiKey.trim();
-        setUserApiKey(key); 
-        
-        // Canvas 내부 테스트가 아닐 경우 선택된 모델 적용
-        if (key) {
-          setSelectedModel(tempModel);
-        } else {
-          // Canvas 내부용 자동 키 주입 환경을 위해 모델 고정
-          setSelectedModel('gemini-2.5-flash-preview-09-2025');
+        if (!key) { setError('API 키를 입력해 주세요.'); return; }
+
+        setIsLoadingModels(true);
+        setError('');
+
+        try {
+          // API 키로 실제 사용 가능한 모델 목록 조회
+          const res = await fetch(
+            `https://generativelanguage.googleapis.com/v1beta/models?key=${key}&pageSize=100`
+          );
+          if (res.ok) {
+            const data = await res.json();
+            // generateContent를 지원하는 gemini- 모델만 필터
+            const filtered = (data.models || [])
+              .filter(m =>
+                m.name.includes('gemini') &&
+                (m.supportedGenerationMethods || []).includes('generateContent') &&
+                !m.name.includes('embedding') &&
+                !m.name.includes('aqa') &&
+                !m.name.includes('image') &&
+                !m.name.includes('audio') &&
+                !m.name.includes('live') &&
+                !m.name.includes('tts')
+              )
+              .map(m => {
+                const id = m.name.replace('models/', '');
+                // 표시 이름: displayName 우선, 없으면 id
+                const displayName = m.displayName || id;
+                return { id, name: displayName };
+              })
+              // 최신 모델이 위로 오도록 정렬
+              .sort((a, b) => b.id.localeCompare(a.id));
+
+            if (filtered.length > 0) {
+              setModelOptions(filtered);
+              // 현재 선택 모델이 목록에 없으면 첫 번째로 교체
+              const firstId = filtered[0].id;
+              const currentValid = filtered.some(m => m.id === tempModel);
+              const finalModel = currentValid ? tempModel : firstId;
+              setTempModel(finalModel);
+              setSelectedModel(finalModel);
+            }
+          }
+        } catch (_) {
+          // 네트워크 오류 시 기본 목록 유지
+        } finally {
+          setIsLoadingModels(false);
         }
-        
+
+        setUserApiKey(key);
+        // ✅ 수정: setSelectedModel은 위 try 블록에서 finalModel로 이미 설정됨
+        // 여기서 tempModel로 덮어쓰면 API 조회 결과가 무시되므로 제거
         setIsApiKeySet(true);
-        setError(''); 
       };
 
       const handleApiKeyReset = () => {
@@ -111,39 +161,69 @@
           setIsApiKeySet(false);
           setFile(null);
           setResults([]);
+          setError('');
         }
       };
 
-      const translatePageImage = async (base64Image, currentDomain, previousContext = "", retries = 5) => {
+      // ✅ 번역 품질 개선: 강화된 프롬프트 + 정확한 API 엔드포인트
+      // modelId, apiKey를 인자로 받아 stale closure 문제 방지
+      const translatePageImage = async (base64Image, currentDomain, previousContext = "", modelId, apiKey, retries = 5) => {
         if (!base64Image) return '';
-        
         const delays = [1000, 2000, 4000, 8000, 16000];
         const base64Data = base64Image.split(',')[1];
-        
-        // v1beta는 최신 모델과 systemInstruction 기능을 위해 가장 권장되는 버전입니다.
-        const apiVersion = 'v1beta';
-        
-        const contextPrompt = previousContext 
-          ? `\n\n[이전 페이지 문맥 참고]\n이전 페이지의 마지막 번역 내용은 다음과 같습니다:\n"... ${previousContext}"\n\n*중요: 이전 페이지에서 문장이 마침표로 끝나지 않고 끊어졌다면, 현재 페이지의 첫 부분과 자연스럽게 연결하여 하나의 완성된 문장으로 번역하세요. 완성된 번역 결과는 현재 페이지 번역의 맨 처음에 위치하게 하세요.*`
+
+        const contextPrompt = previousContext
+          ? `\n\n[이전 페이지 문맥]\n이전 페이지 마지막 내용: "... ${previousContext}"\n→ 위 내용과 자연스럽게 이어지도록 번역하세요. 페이지 경계에서 끊긴 문장은 이 페이지 맨 앞에서 완성해 주세요.`
           : "";
+
+        // ✅ 강화된 번역 프롬프트
+        const translationPrompt = `아래 문서 이미지를 한국어로 번역해 주세요.
+
+[전문 분야: ${currentDomain}]${contextPrompt}
+
+=== 번역 지침 ===
+
+1. **전문 용어**: "${currentDomain}" 분야에서 가장 널리 통용되는 정확한 한국어 용어를 사용하세요. 번역이 애매한 경우 원어를 괄호 안에 병기하세요. 예: 머신러닝(Machine Learning)
+
+2. **표(Table) 처리**: 문서에 표가 있으면 반드시 아래 마크다운 표 형식으로 재현하세요.
+   | 항목 1 | 항목 2 | 항목 3 |
+   |--------|--------|--------|
+   | 내용   | 내용   | 내용   |
+   열 너비, 행 수, 병합 구조를 원본과 최대한 동일하게 유지하세요.
+
+3. **그림·이미지 처리**: 그림, 차트, 그래프, 사진, 로고 등 시각 요소가 있을 때마다 반드시 해당 위치에 아래 태그를 삽입하세요 (0~1000 비율 좌표):
+   \`[IMAGE|ymin|xmin|ymax|xmax|간략한 한국어 설명]\`
+   예: \`[IMAGE|120|50|420|950|Q3 매출 성장률 막대 차트]\`
+
+4. **포맷 유지**: 제목, 소제목, 글머리 기호, 번호 목록, 들여쓰기, 단락 구분을 원본과 동일하게 유지하세요.
+
+5. **자연스러운 한국어**: 직역보다 의역을 우선하되, 기술·학술 문서의 정확성은 반드시 확보하세요.
+
+6. **페이지 경계 문장**: 페이지 경계에서 잘린 문장은 문맥을 고려해 현재 페이지 맨 앞에서 완성해 주세요.
+
+위 지침을 모두 준수하여 번역하세요.`;
 
         for (let i = 0; i < retries; i++) {
           try {
-            // URL 생성 시 'models/' 프리픽스가 정확한지 확인
-            const url = `https://generativelanguage.googleapis.com/${apiVersion}/models/${selectedModel}:generateContent?key=${userApiKey}`;
-            
+            const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:generateContent?key=${apiKey}`;
+
             const response = await fetch(url, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
-                contents: [{ 
+                contents: [{
                   parts: [
-                    { text: `다음 문서 이미지를 한국어로 번역해주세요. \n\n[전문 분야: ${currentDomain}]${contextPrompt}\n\n지시사항:\n1. 지정된 전문 분야에서 가장 널리 사용되는 자연스러운 용어를 사용하세요.\n2. 문서에 표(Table)가 있다면, 마크다운 표 형식(| 항목 | 내용 |)을 사용하여 구조를 최대한 원본과 동일하게 재현하세요.\n3. 문서에 그림, 그래프, 로고, 사진 등이 있다면 반드시 해당 그림이 있는 원본 이미지 상의 영역 좌표(0~1000 비율)를 찾아 정확히 \`[IMAGE|ymin|xmin|ymax|xmax|간략설명]\` 형태의 태그 하나로 표시하세요. (예시: \`[IMAGE|150|200|450|800|차트 분석]\`).\n4. 전체적인 문단 배치나 줄바꿈 등의 포맷팅을 원본 문서와 최대한 유사하게 유지하세요.\n5. 페이지 구분으로 인해 잘린 문장은 현재 페이지 번역 시작 부분에서 매끄럽게 완성해주세요.` },
+                    { text: translationPrompt },
                     { inlineData: { mimeType: "image/jpeg", data: base64Data } }
-                  ] 
+                  ]
                 }],
-                systemInstruction: { 
-                  parts: [{ text: "You are a professional translator specializing in English to Korean translation. You accurately translate text from document images while maintaining structural formatting like tables." }] 
+                systemInstruction: {
+                  parts: [{ text: "You are an expert professional translator specializing in English-to-Korean translation of technical and academic documents. You reproduce document structure faithfully — including tables in markdown format, image position tags, headings, and paragraph breaks — while producing natural, precise Korean." }]
+                },
+                generationConfig: {
+                  temperature: 0.1,       // 번역 정확도 향상을 위해 낮은 temperature
+                  topP: 0.9,
+                  maxOutputTokens: 8192,
                 }
               })
             });
@@ -153,43 +233,42 @@
               let detailedError = `HTTP ${response.status}`;
               try {
                 const errJson = JSON.parse(errText);
-                if (errJson.error) {
-                  detailedError += `: ${errJson.error.message || errJson.error.status}`;
-                }
+                if (errJson.error) detailedError += `: ${errJson.error.message || errJson.error.status}`;
               } catch(e) {
-                detailedError += ` - ${errText.substring(0, 100)}`;
+                detailedError += ` - ${errText.substring(0, 200)}`;
               }
-              
-              // 404 에러의 경우 사용자에게 가이드 제공
+
               if (response.status === 404) {
-                throw new Error(`${detailedError}\n\n사유: 선택한 모델(${selectedModel})을 이 API 버전에서 찾을 수 없습니다. API 키가 해당 모델을 지원하는지 확인하거나 '설정 변경'을 통해 다른 모델(예: gemini-1.5-flash)을 시도해 보세요.`);
+                throw new Error(`${detailedError}\n\n→ 선택한 모델(${modelId})이 현재 API에서 지원되지 않습니다. '재설정' 후 다른 모델을 선택해 주세요.`);
               }
-              
+              if (response.status === 429) {
+                throw new Error(`API 요청 한도 초과(429). 잠시 후 자동으로 재시도합니다...`);
+              }
+              if (response.status === 400) {
+                throw new Error(`잘못된 요청(400): ${detailedError}\n\n→ API 키 또는 모델 설정을 확인해 주세요.`);
+              }
               throw new Error(detailedError);
             }
-            
+
             const result = await response.json();
             let translatedText = result.candidates?.[0]?.content?.parts?.[0]?.text || "번역 결과를 가져오지 못했습니다.";
 
             // 이미지 좌표 태그 파싱 및 크롭
             const imageRegex = /\[IMAGE\s*\|\s*(\d+)\s*\|\s*(\d+)\s*\|\s*(\d+)\s*\|\s*(\d+)\s*\|\s*(.*?)\]/ig;
             const matches = [...translatedText.matchAll(imageRegex)];
-            
+
             for (const m of matches) {
               const fullMatch = m[0];
-              const y1 = parseInt(m[1], 10);
-              const x1 = parseInt(m[2], 10);
-              const y2 = parseInt(m[3], 10);
-              const x2 = parseInt(m[4], 10);
+              const [y1, x1, y2, x2] = [m[1], m[2], m[3], m[4]].map(n => parseInt(n, 10));
               const desc = m[5].trim();
-              
               try {
                 const croppedBase64 = await cropImageFromBase64(base64Image, y1, x1, y2, x2);
-                if (croppedBase64) {
-                  translatedText = translatedText.replace(fullMatch, `\n\n![${desc}](${croppedBase64})\n\n`);
-                } else {
-                  translatedText = translatedText.replace(fullMatch, `\n\n[그림: ${desc}]\n\n`);
-                }
+                translatedText = translatedText.replace(
+                  fullMatch,
+                  croppedBase64
+                    ? `\n\n![${desc}](${croppedBase64})\n\n`
+                    : `\n\n[그림: ${desc}]\n\n`
+                );
               } catch (e) {
                 translatedText = translatedText.replace(fullMatch, `\n\n[그림: ${desc}]\n\n`);
               }
@@ -198,6 +277,8 @@
             return translatedText;
           } catch (err) {
             if (i === retries - 1) throw err;
+            // 429 외 즉시 실패할 에러는 재시도 안 함
+            if (err.message.includes('400') || err.message.includes('404')) throw err;
             await new Promise(resolve => setTimeout(resolve, delays[i]));
           }
         }
@@ -208,7 +289,6 @@
           setError("PDF 파일만 업로드 가능합니다.");
           return;
         }
-
         setFile(uploadedFile);
         setError('');
         setIsProcessing(true);
@@ -216,53 +296,50 @@
         setProgressStatus('PDF 파일을 읽는 중입니다...');
 
         try {
+          // ✅ 수정: 함수 시작 시점에 state 값을 캡처 (stale closure 방지)
+          const currentModel = selectedModel;
+          const currentApiKey = userApiKey;
+
           const arrayBuffer = await uploadedFile.arrayBuffer();
           const pdf = await window.pdfjsLib.getDocument(arrayBuffer).promise;
           const numPages = pdf.numPages;
-          
-          const initialResults = Array.from({ length: numPages }, (_, i) => ({
-            page: i + 1,
-            originalImage: '',
-            translated: '',
-            status: 'pending'
-          }));
-          setResults(initialResults);
+
+          setResults(Array.from({ length: numPages }, (_, i) => ({
+            page: i + 1, originalImage: '', translated: '', status: 'pending'
+          })));
 
           let previousContext = "";
 
           for (let i = 1; i <= numPages; i++) {
             setResults(prev => prev.map(r => r.page === i ? { ...r, status: 'extracting' } : r));
-            setProgressStatus(`페이지 ${i}/${numPages} 분석 중...`);
-            
+            setProgressStatus(`페이지 ${i} / ${numPages} 분석 중...`);
+
             const page = await pdf.getPage(i);
             const viewport = page.getViewport({ scale: 2.0 });
             const canvas = document.createElement('canvas');
-            const context = canvas.getContext('2d');
             canvas.height = viewport.height;
             canvas.width = viewport.width;
-            
-            await page.render({ canvasContext: context, viewport: viewport }).promise;
-            const base64Image = canvas.toDataURL('image/jpeg', 0.8);
-            
+            await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
+            const base64Image = canvas.toDataURL('image/jpeg', 0.85);
+
             setResults(prev => prev.map(r => r.page === i ? { ...r, originalImage: base64Image, status: 'translating' } : r));
-            setProgressStatus(`페이지 ${i}/${numPages} AI 전문 번역 중...`);
+            setProgressStatus(`페이지 ${i} / ${numPages} AI 번역 중...`);
 
             try {
-              const translatedText = await translatePageImage(base64Image, domain, previousContext);
+              const translatedText = await translatePageImage(base64Image, domain, previousContext, currentModel, currentApiKey);
               setResults(prev => prev.map(r => r.page === i ? { ...r, translated: translatedText, status: 'done' } : r));
-              previousContext = translatedText.slice(-150).trim();
+              previousContext = translatedText.replace(/!\[.*?\]\(data:image[^)]+\)/g, '').slice(-200).trim();
             } catch (err) {
               console.error(`Page ${i} Error:`, err);
-              setResults(prev => prev.map(r => r.page === i ? { 
-                ...r, 
-                translated: `[번역 오류]\n사유: ${err.message}`, 
-                status: 'error' 
+              setResults(prev => prev.map(r => r.page === i ? {
+                ...r,
+                translated: `[번역 실패]\n오류 원인: ${err.message}`,
+                status: 'error'
               } : r));
-              previousContext = ""; 
+              previousContext = "";
             }
           }
-          
-          setProgressStatus('모든 페이지 처리가 완료되었습니다.');
+          setProgressStatus('✅ 모든 페이지 처리가 완료되었습니다.');
         } catch (err) {
           console.error(err);
           setError("PDF 문서를 처리할 수 없습니다. 암호가 걸려있거나 손상된 파일인지 확인해 주세요.");
@@ -271,73 +348,415 @@
         }
       };
 
-      const onDragOver = useCallback((e) => {
-        e.preventDefault();
-        e.stopPropagation();
-      }, []);
+      const onDragOver = useCallback((e) => { e.preventDefault(); e.stopPropagation(); }, []);
 
+      // ✅ 수정: onDrop 의존성 배열에 handleFileUpload 관련 상태 추가
       const onDrop = useCallback((e) => {
         e.preventDefault();
         e.stopPropagation();
         if (e.dataTransfer.files && e.dataTransfer.files[0]) {
           handleFileUpload(e.dataTransfer.files[0]);
         }
-      }, [userApiKey, selectedModel]); 
+      }, [userApiKey, selectedModel, domain]);
 
       const handleReset = () => {
         setFile(null);
         setResults([]);
         setError('');
         setProgressStatus('');
+        setShowDownloadMenu(false);
       };
 
-      const downloadText = () => {
-        if (results.length === 0) return;
-        
-        let textContent = `# ${file.name} 번역 결과\n\n`;
-        textContent += `**전문 분야:** ${domain}\n**AI 모델:** ${selectedModel}\n\n---\n\n`;
-        
+      // ✅ 개선: 마크다운(.md) 다운로드
+      const downloadMarkdown = () => {
+        if (!results.length) return;
+        let content = `# ${file.name} 번역 결과\n\n`;
+        content += `> **전문 분야:** ${domain}  \n> **AI 모델:** ${selectedModel}  \n> **번역일:** ${new Date().toLocaleDateString('ko-KR')}\n\n---\n\n`;
         results.forEach(r => {
-          textContent += `## 페이지 ${r.page}\n\n${r.translated}\n\n---\n\n`;
+          content += `## 페이지 ${r.page}\n\n${r.translated}\n\n---\n\n`;
+        });
+        triggerDownload(content, `번역_${file.name.replace('.pdf', '')}.md`, 'text/markdown;charset=utf-8');
+      };
+
+      // ✅ 신규: 순수 텍스트(.txt) 다운로드
+      const downloadTxt = () => {
+        if (!results.length) return;
+        let content = `${file.name} 번역 결과\n`;
+        content += `전문 분야: ${domain} | AI 모델: ${selectedModel} | 번역일: ${new Date().toLocaleDateString('ko-KR')}\n`;
+        content += '='.repeat(60) + '\n\n';
+        results.forEach(r => {
+          content += `[ 페이지 ${r.page} ]\n\n`;
+          // 이미지 태그 및 마크다운 문법 제거
+          const plainText = r.translated
+            .replace(/!\[.*?\]\(data:image[^)]+\)/g, '[그림]')
+            .replace(/#{1,6}\s/g, '')
+            .replace(/\*\*(.*?)\*\*/g, '$1')
+            .replace(/\|(.*)\|/g, (m) => m.replace(/\|/g, '\t').trim())
+            .replace(/^[-*]\s/gm, '• ');
+          content += plainText + '\n\n' + '-'.repeat(60) + '\n\n';
+        });
+        triggerDownload(content, `번역_${file.name.replace('.pdf', '')}.txt`, 'text/plain;charset=utf-8');
+      };
+
+      // ✅ 신규: HTML(.html) 다운로드 (표·이미지 완전 보존)
+      const downloadHtml = () => {
+        if (!results.length) return;
+        const pagesHtml = results.map(r => {
+          const rendered = window.marked ? window.marked.parse(r.translated || '') : r.translated;
+          return `
+            <section class="page">
+              <h2>페이지 ${r.page}</h2>
+              <div class="content">${rendered}</div>
+            </section>`;
+        }).join('\n<hr>\n');
+
+        const html = `<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<title>${file.name} 번역 결과</title>
+<style>
+  body { font-family: 'Noto Sans KR', sans-serif; max-width: 900px; margin: 40px auto; padding: 0 20px; color: #1e293b; line-height: 1.8; }
+  h1 { font-size: 1.8rem; border-bottom: 3px solid #3b82f6; padding-bottom: 12px; }
+  h2 { font-size: 1.2rem; color: #3b82f6; margin-top: 2rem; }
+  .meta { color: #64748b; font-size: 0.9rem; margin-bottom: 2rem; }
+  table { border-collapse: collapse; width: 100%; margin: 1.5rem 0; font-size: 0.9rem; }
+  th { background: #f1f5f9; padding: 10px 14px; border: 1px solid #e2e8f0; font-weight: 700; }
+  td { padding: 10px 14px; border: 1px solid #e2e8f0; }
+  img { max-width: 100%; border-radius: 8px; margin: 1rem 0; box-shadow: 0 2px 12px rgba(0,0,0,0.1); }
+  hr { border: none; border-top: 1px solid #e2e8f0; margin: 2rem 0; }
+</style>
+</head>
+<body>
+<h1>${file.name} 번역 결과</h1>
+<p class="meta">전문 분야: ${domain} &nbsp;|&nbsp; AI 모델: ${selectedModel} &nbsp;|&nbsp; 번역일: ${new Date().toLocaleDateString('ko-KR')}</p>
+${pagesHtml}
+</body>
+</html>`;
+        triggerDownload(html, `번역_${file.name.replace('.pdf', '')}.html`, 'text/html;charset=utf-8');
+      };
+
+      // ✅ 신규: Word(.docx) 다운로드
+      const downloadDocx = async () => {
+        if (!results.length) return;
+        const docx = window.docx;
+        if (!docx) {
+          alert('Word 라이브러리를 불러오지 못했습니다. 페이지를 새로 고침 후 다시 시도해 주세요.');
+          return;
+        }
+
+        const {
+          Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell,
+          ImageRun, HeadingLevel, AlignmentType, BorderStyle, WidthType,
+          ShadingType, LevelFormat, PageBreak
+        } = docx;
+
+        // base64 → Uint8Array 변환 (ImageRun 용)
+        const base64ToUint8Array = (base64) => {
+          const b64 = base64.split(',')[1];
+          const bin = atob(b64);
+          const arr = new Uint8Array(bin.length);
+          for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+          return arr;
+        };
+
+        // 이미지 자연 크기 측정
+        const getImageSize = (base64) => new Promise((resolve) => {
+          const img = new Image();
+          img.onload = () => resolve({ width: img.naturalWidth, height: img.naturalHeight });
+          img.onerror = () => resolve({ width: 400, height: 300 });
+          img.src = base64;
         });
 
-        const blob = new Blob([textContent], { type: 'text/markdown;charset=utf-8' });
-        const url = URL.createObjectURL(blob);
+        // 마크다운 표 파싱 → docx Table
+        const parseMarkdownTable = (lines) => {
+          const rows = lines.filter(l => l.trim().startsWith('|') && !l.match(/^\|[-:\s|]+\|$/));
+          if (rows.length === 0) return null;
+
+          const border = { style: BorderStyle.SINGLE, size: 1, color: 'CCCCCC' };
+          const borders = { top: border, bottom: border, left: border, right: border };
+
+          const isHeader = (idx) => idx === 0;
+          const tableRows = rows.map((row, rowIdx) => {
+            const cells = row.split('|').filter((_, i, a) => i > 0 && i < a.length - 1);
+            return new TableRow({
+              children: cells.map(cell => new TableCell({
+                borders,
+                width: { size: Math.floor(9026 / cells.length), type: WidthType.DXA },
+                margins: { top: 80, bottom: 80, left: 120, right: 120 },
+                shading: isHeader(rowIdx)
+                  ? { fill: 'EFF6FF', type: ShadingType.CLEAR }
+                  : { fill: 'FFFFFF', type: ShadingType.CLEAR },
+                children: [new Paragraph({
+                  children: [new TextRun({
+                    text: cell.trim(),
+                    bold: isHeader(rowIdx),
+                    font: 'Malgun Gothic',
+                    size: 20,
+                  })]
+                })]
+              }))
+            });
+          });
+
+          const colCount = rows[0].split('|').filter((_, i, a) => i > 0 && i < a.length - 1).length;
+          return new Table({
+            width: { size: 9026, type: WidthType.DXA },
+            columnWidths: Array(colCount).fill(Math.floor(9026 / colCount)),
+            rows: tableRows,
+          });
+        };
+
+        // 텍스트 블록 → docx Paragraph 배열 변환
+        const textToDocxChildren = async (text) => {
+          const elements = [];
+          const lines = text.split('\n');
+          let tableBuffer = [];
+          let inTable = false;
+
+          const flushTable = () => {
+            if (tableBuffer.length > 0) {
+              const tbl = parseMarkdownTable(tableBuffer);
+              if (tbl) {
+                elements.push(tbl);
+                elements.push(new Paragraph({ children: [] })); // 표 뒤 여백
+              }
+              tableBuffer = [];
+            }
+            inTable = false;
+          };
+
+          for (let i = 0; i < lines.length; i++) {
+            const line = lines[i];
+
+            // 마크다운 표 감지
+            if (line.trim().startsWith('|')) {
+              inTable = true;
+              tableBuffer.push(line);
+              continue;
+            }
+            if (inTable) flushTable();
+
+            // 이미지 태그
+            const imgMatch = line.match(/!\[(.*?)\]\((data:image\/(jpeg|png);base64,[^)]+)\)/);
+            if (imgMatch) {
+              try {
+                const src = imgMatch[2];
+                const mimeType = imgMatch[3] === 'png' ? 'image/png' : 'image/jpeg';
+                const imgType = imgMatch[3] === 'png' ? 'png' : 'jpg';
+                const { width, height } = await getImageSize(src);
+                // 최대 너비 8800 EMU 기준으로 비율 맞춤 (A4 본문 약 16cm)
+                const maxEmuW = 5760000;
+                const ratio = Math.min(1, maxEmuW / (width * 9144));
+                const emuW = Math.round(width * 9144 * ratio);
+                const emuH = Math.round(height * 9144 * ratio);
+                elements.push(new Paragraph({
+                  alignment: AlignmentType.CENTER,
+                  children: [new ImageRun({
+                    data: base64ToUint8Array(src),
+                    transformation: { width: emuW / 9144, height: emuH / 9144 },
+                    type: imgType,
+                  })],
+                }));
+                if (imgMatch[1]) {
+                  elements.push(new Paragraph({
+                    alignment: AlignmentType.CENTER,
+                    children: [new TextRun({ text: imgMatch[1], italics: true, size: 18, color: '64748B', font: 'Malgun Gothic' })]
+                  }));
+                }
+              } catch (e) {
+                elements.push(new Paragraph({ children: [new TextRun({ text: '[그림]', italics: true, color: '94A3B8', font: 'Malgun Gothic' })] }));
+              }
+              continue;
+            }
+
+            // 제목 (# ## ###)
+            const headingMatch = line.match(/^(#{1,3})\s+(.*)/);
+            if (headingMatch) {
+              const level = [HeadingLevel.HEADING_1, HeadingLevel.HEADING_2, HeadingLevel.HEADING_3][headingMatch[1].length - 1];
+              elements.push(new Paragraph({
+                heading: level,
+                children: [new TextRun({ text: headingMatch[2].trim(), font: 'Malgun Gothic' })]
+              }));
+              continue;
+            }
+
+            // 글머리 기호 (- * •)
+            const bulletMatch = line.match(/^[-*•]\s+(.*)/);
+            if (bulletMatch) {
+              elements.push(new Paragraph({
+                numbering: { reference: 'bullets', level: 0 },
+                children: [new TextRun({ text: bulletMatch[1].trim(), font: 'Malgun Gothic', size: 22 })]
+              }));
+              continue;
+            }
+
+            // 번호 목록 (1. 2. ...)
+            const numMatch = line.match(/^\d+\.\s+(.*)/);
+            if (numMatch) {
+              elements.push(new Paragraph({
+                numbering: { reference: 'numbers', level: 0 },
+                children: [new TextRun({ text: numMatch[1].trim(), font: 'Malgun Gothic', size: 22 })]
+              }));
+              continue;
+            }
+
+            // 빈 줄
+            if (!line.trim()) {
+              elements.push(new Paragraph({ children: [] }));
+              continue;
+            }
+
+            // 일반 텍스트 (**bold** 처리 포함)
+            const runParts = line.split(/(\*\*.*?\*\*)/g);
+            const runs = runParts.map(part => {
+              const boldMatch = part.match(/^\*\*(.*)\*\*$/);
+              return new TextRun({
+                text: boldMatch ? boldMatch[1] : part,
+                bold: !!boldMatch,
+                font: 'Malgun Gothic',
+                size: 22,
+              });
+            });
+            elements.push(new Paragraph({ children: runs }));
+          }
+
+          if (inTable) flushTable();
+          return elements;
+        };
+
+        // 문서 섹션 구성
+        const sectionChildren = [];
+
+        // 표지
+        sectionChildren.push(
+          new Paragraph({
+            heading: HeadingLevel.HEADING_1,
+            alignment: AlignmentType.CENTER,
+            children: [new TextRun({ text: `${file.name.replace('.pdf', '')}`, font: 'Malgun Gothic', bold: true, size: 36 })]
+          }),
+          new Paragraph({
+            alignment: AlignmentType.CENTER,
+            spacing: { after: 400 },
+            children: [new TextRun({ text: '번역 결과', font: 'Malgun Gothic', size: 28, color: '3B82F6' })]
+          }),
+          new Paragraph({
+            alignment: AlignmentType.CENTER,
+            spacing: { after: 200 },
+            children: [new TextRun({ text: `전문 분야: ${domain}  |  AI 모델: ${selectedModel}  |  번역일: ${new Date().toLocaleDateString('ko-KR')}`, font: 'Malgun Gothic', size: 18, color: '64748B' })]
+          }),
+          new Paragraph({ children: [new PageBreak()] })
+        );
+
+        // 페이지별 내용
+        for (let i = 0; i < results.length; i++) {
+          const r = results[i];
+          sectionChildren.push(
+            new Paragraph({
+              heading: HeadingLevel.HEADING_2,
+              children: [new TextRun({ text: `페이지 ${r.page}`, font: 'Malgun Gothic' })]
+            })
+          );
+          const children = await textToDocxChildren(r.translated || '');
+          sectionChildren.push(...children);
+          if (i < results.length - 1) {
+            sectionChildren.push(new Paragraph({ children: [new PageBreak()] }));
+          }
+        }
+
+        const doc = new Document({
+          numbering: {
+            config: [
+              {
+                reference: 'bullets',
+                levels: [{ level: 0, format: LevelFormat.BULLET, text: '•', alignment: AlignmentType.LEFT,
+                  style: { paragraph: { indent: { left: 720, hanging: 360 } } } }]
+              },
+              {
+                reference: 'numbers',
+                levels: [{ level: 0, format: LevelFormat.DECIMAL, text: '%1.', alignment: AlignmentType.LEFT,
+                  style: { paragraph: { indent: { left: 720, hanging: 360 } } } }]
+              }
+            ]
+          },
+          styles: {
+            default: {
+              document: { run: { font: 'Malgun Gothic', size: 22 } }
+            },
+            paragraphStyles: [
+              { id: 'Heading1', name: 'Heading 1', basedOn: 'Normal', next: 'Normal', quickFormat: true,
+                run: { size: 36, bold: true, font: 'Malgun Gothic', color: '1E293B' },
+                paragraph: { spacing: { before: 360, after: 240 }, outlineLevel: 0 } },
+              { id: 'Heading2', name: 'Heading 2', basedOn: 'Normal', next: 'Normal', quickFormat: true,
+                run: { size: 28, bold: true, font: 'Malgun Gothic', color: '3B82F6' },
+                paragraph: { spacing: { before: 280, after: 180 }, outlineLevel: 1 } },
+              { id: 'Heading3', name: 'Heading 3', basedOn: 'Normal', next: 'Normal', quickFormat: true,
+                run: { size: 24, bold: true, font: 'Malgun Gothic', color: '475569' },
+                paragraph: { spacing: { before: 200, after: 120 }, outlineLevel: 2 } },
+            ]
+          },
+          sections: [{
+            properties: {
+              page: {
+                size: { width: 11906, height: 16838 }, // A4
+                margin: { top: 1440, right: 1440, bottom: 1440, left: 1440 }
+              }
+            },
+            children: sectionChildren
+          }]
+        });
+
+        const buffer = await Packer.toBlob(doc);
+        const url = URL.createObjectURL(buffer);
         const a = document.createElement('a');
         a.href = url;
-        a.download = `번역_${file.name.replace('.pdf', '')}.md`;
+        a.download = `번역_${file.name.replace('.pdf', '')}.docx`;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
+        setShowDownloadMenu(false);
       };
 
+      const triggerDownload = (content, filename, mimeType) => {
+        const blob = new Blob([content], { type: mimeType });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        setShowDownloadMenu(false);
+      };
+
+      // ✅ 개선: marked.js로 마크다운 렌더링 (표 포함)
       const formatTranslatedText = (text, status) => {
-        if (!text) return <span className="italic text-slate-400 font-normal">번역 결과가 없습니다.</span>;
-        
-        const isError = status === 'error';
-        const parts = text.split(/!\[(.*?)\]\((data:image\/[^)]+)\)/g);
-        
-        const elements = [];
-        for (let i = 0; i < parts.length; i += 3) {
-          if (parts[i]) {
-            elements.push(<span key={`text-${i}`}>{parts[i]}</span>);
-          }
-          if (i + 1 < parts.length) {
-            const alt = parts[i+1];
-            const src = parts[i+2];
-            elements.push(
-              <div key={`img-${i}`} className="my-6 border border-slate-200 rounded-2xl overflow-hidden bg-slate-100 p-2 shadow-sm flex flex-col items-center w-full">
-                <img src={src} alt={alt} className="max-w-full h-auto rounded-xl shadow-inner" />
-                {alt && <p className="text-center text-[10px] text-slate-500 mt-2 font-medium">{alt}</p>}
-              </div>
-            );
-          }
+        if (!text) return <span className="italic text-slate-400">번역 결과가 없습니다.</span>;
+
+        if (status === 'error') {
+          return <div className="whitespace-pre-wrap text-red-500 text-sm font-mono bg-red-50 p-4 rounded-xl">{text}</div>;
         }
-        
+
+        // 이미지 자리 보존 후 marked 렌더링
+        const parts = text.split(/(!\[.*?\]\(data:image\/[^)]+\))/g);
         return (
-          <div className={`whitespace-pre-wrap font-sans leading-relaxed text-[15px] ${isError ? 'text-red-500' : 'text-slate-800'}`}>
-            {elements}
+          <div className="translation-content font-sans leading-relaxed text-[15px] text-slate-800 space-y-1">
+            {parts.map((part, idx) => {
+              const imgMatch = part.match(/!\[(.*?)\]\((data:image\/[^)]+)\)/);
+              if (imgMatch) {
+                return (
+                  <div key={idx} className="my-6 border border-slate-200 rounded-2xl overflow-hidden bg-slate-50 p-3 shadow-sm flex flex-col items-center">
+                    <img src={imgMatch[2]} alt={imgMatch[1]} className="max-w-full h-auto rounded-xl" />
+                    {imgMatch[1] && <p className="text-center text-[11px] text-slate-500 mt-2 font-medium">{imgMatch[1]}</p>}
+                  </div>
+                );
+              }
+              if (!part.trim()) return null;
+              const html = window.marked ? window.marked.parse(part) : part;
+              return <div key={idx} className="prose prose-sm prose-slate max-w-none" dangerouslySetInnerHTML={{ __html: html }} />;
+            })}
           </div>
         );
       };
@@ -345,7 +764,8 @@
       return (
         <div className="min-h-screen p-4 md:p-8">
           <div className="max-w-6xl mx-auto space-y-6">
-            
+
+            {/* Header */}
             <div className="text-center space-y-3 mb-10">
               <div className="flex items-center justify-center space-x-4 mb-4">
                 <div className="p-3.5 bg-blue-600 rounded-[2rem] shadow-xl shadow-blue-200 rotate-3">
@@ -359,7 +779,7 @@
             </div>
 
             {error && (
-              <div className="bg-red-50 border border-red-200 text-red-700 p-5 rounded-2xl flex items-start shadow-sm animate-in fade-in slide-in-from-top-4 duration-300">
+              <div className="bg-red-50 border border-red-200 text-red-700 p-5 rounded-2xl flex items-start shadow-sm">
                 <AlertCircle className="w-5 h-5 mr-3 mt-0.5 flex-shrink-0" />
                 <div className="text-sm">
                   <p className="font-bold mb-1">오류가 발생했습니다</p>
@@ -370,144 +790,130 @@
 
             {!file && (
               <div className="mt-8 space-y-6">
-                
-                {/* 1. API & Model Setup */}
+
+                {/* 1. API 설정 */}
                 <div className="bg-white p-7 rounded-[2.5rem] border border-slate-200 shadow-xl shadow-slate-200/50">
-                  <div className="w-full">
-                    <div className="flex items-center justify-between mb-4">
-                      <label className="text-base font-bold text-slate-800 flex items-center">
-                        <Key className="w-5 h-5 mr-2 text-blue-500" />
-                        1. API 서비스 설정
-                      </label>
-                      <button 
-                        onClick={() => setShowManualModel(!showManualModel)}
-                        className="text-[11px] font-bold text-slate-400 hover:text-blue-600 flex items-center transition-colors"
-                      >
-                        <Settings className="w-3.5 h-3.5 mr-1.5" />
-                        커스텀 모델 식별자 {showManualModel ? '숨기기' : '사용하기'}
-                      </button>
+                  <div className="flex items-center justify-between mb-4">
+                    <label className="text-base font-bold text-slate-800 flex items-center">
+                      <Key className="w-5 h-5 mr-2 text-blue-500" />
+                      1. API 서비스 설정
+                    </label>
+                    <button
+                      onClick={() => setShowManualModel(!showManualModel)}
+                      className="text-[11px] font-bold text-slate-400 hover:text-blue-600 flex items-center transition-colors"
+                    >
+                      <Settings className="w-3.5 h-3.5 mr-1.5" />
+                      커스텀 모델 {showManualModel ? '숨기기' : '직접 입력'}
+                    </button>
+                  </div>
+
+                  <form onSubmit={handleApiKeySubmit} className="space-y-4">
+                    <div className="flex flex-col md:flex-row gap-3">
+                      <input
+                        type="password"
+                        placeholder="Google Gemini API 키 (AIzaSy...)"
+                        value={tempApiKey}
+                        onChange={(e) => setTempApiKey(e.target.value)}
+                        disabled={isApiKeySet}
+                        className="flex-1 px-5 py-3.5 text-sm rounded-2xl border border-slate-200 focus:border-blue-500 focus:ring-4 focus:ring-blue-100 outline-none transition-all disabled:bg-slate-50 disabled:text-slate-400"
+                      />
+
+                      {showManualModel ? (
+                        <input
+                          type="text"
+                          placeholder="모델 ID 직접 입력"
+                          value={tempModel}
+                          onChange={(e) => setTempModel(e.target.value)}
+                          disabled={isApiKeySet}
+                          className="w-full md:w-72 px-5 py-3.5 text-sm rounded-2xl border border-blue-200 bg-blue-50/50 font-mono outline-none"
+                        />
+                      ) : (
+                        <select
+                          value={tempModel}
+                          onChange={(e) => setTempModel(e.target.value)}
+                          disabled={isApiKeySet}
+                          className="w-full md:w-72 px-4 py-3.5 text-sm rounded-2xl border border-slate-200 focus:border-blue-500 outline-none transition-all disabled:bg-slate-50 appearance-none bg-[url('data:image/svg+xml;charset=utf-8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20fill%3D%22none%22%20viewBox%3D%220%200%2020%2020%22%3E%3Cpath%20stroke%3D%22%236b7280%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%20stroke-width%3D%221.5%22%20d%3D%22m6%208%204%204%204-4%22%2F%3E%3C%2Fsvg%3E')] bg-[length:1.25rem_1.25rem] bg-[right_1rem_center] bg-no-repeat"
+                        >
+                          {modelOptions.map(opt => (
+                            <option key={opt.id} value={opt.id}>{opt.name}</option>
+                          ))}
+                        </select>
+                      )}
+
+                      {!isApiKeySet ? (
+                        <button type="submit" disabled={isLoadingModels}
+                          className="px-8 py-3.5 bg-slate-900 hover:bg-black text-white text-sm font-bold rounded-2xl transition-all shadow-lg active:scale-95 disabled:opacity-60 disabled:cursor-wait flex items-center justify-center gap-2 min-w-[110px]">
+                          {isLoadingModels
+                            ? <><Loader2 className="w-4 h-4 animate-spin" />확인 중...</>
+                            : '설정 완료'}
+                        </button>
+                      ) : (
+                        <button type="button" onClick={handleApiKeyReset} className="px-8 py-3.5 border-2 border-slate-100 text-slate-500 hover:bg-slate-50 text-sm font-bold rounded-2xl transition-all flex items-center justify-center">
+                          <LogOut className="w-4 h-4 mr-2" />재설정
+                        </button>
+                      )}
                     </div>
 
-                    <form onSubmit={handleApiKeySubmit} className="space-y-4">
-                      <div className="flex flex-col md:flex-row gap-3">
-                        <input
-                          type="password"
-                          placeholder="Google Gemini API 키 (AIzaSy...)"
-                          value={tempApiKey}
-                          onChange={(e) => setTempApiKey(e.target.value)}
-                          disabled={isApiKeySet}
-                          className="flex-1 px-5 py-3.5 text-sm rounded-2xl border border-slate-200 focus:border-blue-500 focus:ring-4 focus:ring-blue-100 outline-none transition-all disabled:bg-slate-50 disabled:text-slate-400"
-                        />
-                        
-                        {showManualModel ? (
-                          <input
-                            type="text"
-                            placeholder="직접 입력 (예: gemini-1.5-flash-8b)"
-                            value={tempModel}
-                            onChange={(e) => setTempModel(e.target.value)}
-                            disabled={isApiKeySet}
-                            className="w-full md:w-64 px-5 py-3.5 text-sm rounded-2xl border border-blue-200 bg-blue-50/50 font-mono outline-none"
-                          />
-                        ) : (
-                          <select
-                            value={tempModel}
-                            onChange={(e) => setTempModel(e.target.value)}
-                            disabled={isApiKeySet}
-                            className="w-full md:w-64 px-4 py-3.5 text-sm rounded-2xl border border-slate-200 focus:border-blue-500 outline-none transition-all disabled:bg-slate-50 appearance-none bg-[url('data:image/svg+xml;charset=utf-8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20fill%3D%22none%22%20viewBox%3D%220%200%2020%2020%22%3E%3Cpath%20stroke%3D%22%236b7280%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%20stroke-width%3D%221.5%22%20d%3D%22m6%208%204%204%204-4%22%2F%3E%3C%2Fsvg%3E')] bg-[length:1.25rem_1.25rem] bg-[right_1rem_center] bg-no-repeat"
-                          >
-                            {modelOptions.map(opt => (
-                              <option key={opt.id} value={opt.id}>{opt.name}</option>
-                            ))}
-                          </select>
-                        )}
-
-                        {!isApiKeySet ? (
-                          <button
-                            type="submit"
-                            className="px-8 py-3.5 bg-slate-900 hover:bg-black text-white text-sm font-bold rounded-2xl transition-all shadow-lg active:scale-95"
-                          >
-                            설정 완료
-                          </button>
-                        ) : (
-                          <button
-                            type="button"
-                            onClick={handleApiKeyReset}
-                            className="px-8 py-3.5 border-2 border-slate-100 text-slate-500 hover:bg-slate-50 text-sm font-bold rounded-2xl transition-all flex items-center justify-center"
-                          >
-                            <LogOut className="w-4 h-4 mr-2" />
-                            재설정
-                          </button>
-                        )}
-                      </div>
-                      
-                      {!isApiKeySet && (
-                        <div className="flex items-start p-4 bg-blue-50/50 rounded-2xl border border-blue-100/50">
-                          <Info className="w-4 h-4 text-blue-500 mr-3 mt-0.5" />
-                          <div className="text-[11px] text-blue-700/80 leading-relaxed">
-                            <p><strong>GitHub Pages 배포 후 사용 시:</strong> 반드시 구글 AI Studio에서 개인 API 키를 발급받아야 합니다.</p>
-                            <p className="mt-1 opacity-70">* API 키는 서버에 저장되지 않고 오직 현재 브라우저 내에서만 사용됩니다.</p>
-                          </div>
+                    {isApiKeySet && (
+                      <div className="flex items-start p-4 bg-green-50 rounded-2xl border border-green-100 gap-3">
+                        <CheckCircle className="w-4 h-4 text-green-500 mt-0.5 flex-shrink-0" />
+                        <div className="text-[12px] text-green-700 leading-relaxed">
+                          <p className="font-bold">API 설정 완료 — 사용 모델: {selectedModel}</p>
+                          <p className="opacity-70 mt-0.5">모델 목록을 API에서 직접 조회했습니다. ({modelOptions.length}개 사용 가능)</p>
                         </div>
-                      )}
-                    </form>
-                  </div>
+                      </div>
+                    )}
+
+                    {!isApiKeySet && (
+                      <div className="flex items-start p-4 bg-blue-50/50 rounded-2xl border border-blue-100/50">
+                        <Info className="w-4 h-4 text-blue-500 mr-3 mt-0.5 flex-shrink-0" />
+                        <div className="text-[11px] text-blue-700/80 leading-relaxed space-y-1">
+                          <p><strong>Google AI Studio</strong>에서 무료 API 키를 발급받아 입력하세요.</p>
+                          <p className="opacity-70">* API 키는 브라우저 내에서만 사용되며 서버에 저장되지 않습니다.</p>
+                        </div>
+                      </div>
+                    )}
+                  </form>
                 </div>
 
-                {/* 2. Domain Selection */}
-                <div className={`bg-white p-7 rounded-[2.5rem] border border-slate-200 shadow-xl shadow-slate-200/50 transition-all duration-500 ${!isApiKeySet ? 'opacity-30 pointer-events-none scale-[0.98]' : 'opacity-100'}`}>
+                {/* 2. 전문 분야 선택 */}
+                <div className={`bg-white p-7 rounded-[2.5rem] border border-slate-200 shadow-xl shadow-slate-200/50 transition-all duration-500 ${!isApiKeySet ? 'opacity-30 pointer-events-none scale-[0.98]' : ''}`}>
                   <label className="block text-base font-bold text-slate-800 mb-5">2. 전문 분야 선택</label>
                   <div className="flex flex-wrap gap-2.5">
                     {domains.map(d => (
-                      <button
-                        key={d}
-                        onClick={() => setDomain(d)}
-                        className={`px-5 py-2.5 rounded-2xl text-sm font-bold transition-all ${
-                          domain === d 
-                            ? 'bg-blue-600 text-white shadow-lg shadow-blue-200 ring-2 ring-blue-600 ring-offset-2' 
-                            : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
-                        }`}
-                      >
+                      <button key={d} onClick={() => setDomain(d)}
+                        className={`px-5 py-2.5 rounded-2xl text-sm font-bold transition-all ${domain === d ? 'bg-blue-600 text-white shadow-lg shadow-blue-200 ring-2 ring-blue-600 ring-offset-2' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}>
                         {d}
                       </button>
                     ))}
                   </div>
                 </div>
 
-                {/* 3. File Upload Area */}
-                <div 
-                  className={`border-2 border-dashed bg-white rounded-[3rem] p-16 text-center transition-all duration-500 shadow-xl shadow-slate-200/50 group ${
-                    !isApiKeySet 
-                      ? 'border-slate-200 opacity-30 cursor-not-allowed' 
-                      : 'border-slate-300 cursor-pointer hover:border-blue-500 hover:bg-blue-50/30'
-                  }`}
+                {/* 3. 파일 업로드 */}
+                <div
+                  className={`border-2 border-dashed bg-white rounded-[3rem] p-16 text-center transition-all duration-500 shadow-xl shadow-slate-200/50 group ${!isApiKeySet ? 'border-slate-200 opacity-30 cursor-not-allowed' : 'border-slate-300 cursor-pointer hover:border-blue-500 hover:bg-blue-50/30'}`}
                   onDragOver={onDragOver}
                   onDrop={onDrop}
                   onClick={() => isApiKeySet && fileInputRef.current?.click()}
                 >
-                  <input 
-                    type="file" 
-                    ref={fileInputRef} 
-                    className="hidden" 
-                    accept=".pdf"
+                  <input type="file" ref={fileInputRef} className="hidden" accept=".pdf"
                     onChange={(e) => e.target.files && handleFileUpload(e.target.files[0])}
-                    disabled={!isApiKeySet}
-                  />
-                  <div className={`w-24 h-24 mx-auto mb-6 rounded-[2rem] flex items-center justify-center transition-all duration-300 ${
-                    !isApiKeySet ? 'bg-slate-50 text-slate-200' : 'bg-blue-50 text-blue-500 group-hover:scale-110 group-hover:rotate-6'
-                  }`}>
+                    disabled={!isApiKeySet} />
+                  <div className={`w-24 h-24 mx-auto mb-6 rounded-[2rem] flex items-center justify-center transition-all duration-300 ${!isApiKeySet ? 'bg-slate-50 text-slate-200' : 'bg-blue-50 text-blue-500 group-hover:scale-110 group-hover:rotate-6'}`}>
                     <Upload className="w-10 h-10" />
                   </div>
                   <h3 className="text-2xl font-black text-slate-800 mb-2">
                     {isApiKeySet ? '3. 번역할 PDF를 선택해 주세요' : '1단계 설정을 먼저 완료해 주세요'}
                   </h3>
-                  <p className="text-slate-400 text-sm font-medium">마우스로 파일을 끌어다 놓아도 바로 시작할 수 있습니다.</p>
+                  <p className="text-slate-400 text-sm font-medium">파일을 끌어다 놓거나 클릭하여 업로드하세요.</p>
                 </div>
               </div>
             )}
 
             {file && (
               <div className="space-y-6 pb-20">
-                {/* Processing Header */}
+
+                {/* 처리 헤더 */}
                 <div className="bg-white p-6 rounded-[2rem] shadow-xl shadow-slate-200/50 border border-slate-100 flex flex-col md:flex-row justify-between items-center gap-6">
                   <div className="flex items-center space-x-5 w-full md:w-auto">
                     <div className="w-14 h-14 bg-red-50 text-red-500 rounded-2xl flex items-center justify-center flex-shrink-0 shadow-inner">
@@ -515,51 +921,99 @@
                     </div>
                     <div className="flex-1 min-w-0">
                       <p className="font-bold text-slate-900 truncate text-lg" title={file.name}>{file.name}</p>
-                      <div className="flex items-center text-xs font-bold text-slate-400 mt-1 uppercase tracking-tighter">
-                        <span className="bg-slate-100 px-2 py-0.5 rounded mr-2">{(file.size / 1024 / 1024).toFixed(2)} MB</span>
+                      <div className="flex items-center text-xs font-bold text-slate-400 mt-1 gap-2">
+                        <span className="bg-slate-100 px-2 py-0.5 rounded">{(file.size / 1024 / 1024).toFixed(2)} MB</span>
                         <span className="text-blue-500">{selectedModel}</span>
+                        <span className="bg-blue-50 text-blue-600 px-2 py-0.5 rounded">{domain}</span>
                       </div>
                     </div>
                   </div>
 
-                  <div className="flex items-center space-x-4 w-full md:w-auto">
+                  <div className="flex items-center space-x-3 w-full md:w-auto">
                     {isProcessing && (
                       <div className="flex items-center text-blue-600 bg-blue-50 px-5 py-2.5 rounded-2xl text-sm font-bold shadow-sm animate-pulse">
                         <Loader2 className="w-4 h-4 mr-2.5 animate-spin" />
                         {progressStatus}
                       </div>
                     )}
+
+                    {/* ✅ 개선: 다운로드 드롭다운 메뉴 */}
                     {!isProcessing && results.length > 0 && (
-                      <button 
-                        onClick={downloadText}
-                        className="flex-1 md:flex-none flex items-center justify-center px-8 py-3.5 bg-slate-900 text-white rounded-2xl hover:bg-black text-sm font-bold shadow-xl transition-all active:scale-95"
-                      >
-                        <Download className="w-4 h-4 mr-2.5" />
-                        결과 다운로드 (.md)
-                      </button>
+                      <div className="relative" ref={downloadMenuRef}>
+                        <button
+                          onClick={() => setShowDownloadMenu(!showDownloadMenu)}
+                          className="flex items-center px-6 py-3.5 bg-slate-900 text-white rounded-2xl hover:bg-black text-sm font-bold shadow-xl transition-all active:scale-95 gap-2"
+                        >
+                          <Download className="w-4 h-4" />
+                          결과 다운로드
+                          <ChevronDown className={`w-4 h-4 transition-transform ${showDownloadMenu ? 'rotate-180' : ''}`} />
+                        </button>
+
+                        {showDownloadMenu && (
+                          <div className="absolute right-0 mt-2 w-64 bg-white border border-slate-200 rounded-2xl shadow-2xl shadow-slate-300/50 overflow-hidden z-50">
+                            <div className="px-4 py-3 border-b border-slate-100">
+                              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">다운로드 형식 선택</p>
+                            </div>
+                            <div className="p-2 space-y-1">
+                              <button onClick={downloadMarkdown}
+                                className="w-full text-left px-4 py-3 text-sm font-bold text-slate-700 hover:bg-blue-50 hover:text-blue-700 rounded-xl transition-colors flex items-center gap-3">
+                                <span className="text-xl">📝</span>
+                                <div>
+                                  <div>.md (마크다운)</div>
+                                  <div className="text-[10px] font-normal text-slate-400">표·이미지 태그 포함</div>
+                                </div>
+                              </button>
+                              <button onClick={downloadTxt}
+                                className="w-full text-left px-4 py-3 text-sm font-bold text-slate-700 hover:bg-blue-50 hover:text-blue-700 rounded-xl transition-colors flex items-center gap-3">
+                                <span className="text-xl">📄</span>
+                                <div>
+                                  <div>.txt (순수 텍스트)</div>
+                                  <div className="text-[10px] font-normal text-slate-400">서식 제거, 복사 편리</div>
+                                </div>
+                              </button>
+                              <button onClick={downloadHtml}
+                                className="w-full text-left px-4 py-3 text-sm font-bold text-slate-700 hover:bg-blue-50 hover:text-blue-700 rounded-xl transition-colors flex items-center gap-3">
+                                <span className="text-xl">🌐</span>
+                                <div>
+                                  <div>.html (웹 문서)</div>
+                                  <div className="text-[10px] font-normal text-slate-400">표·이미지 완전 렌더링</div>
+                                </div>
+                              </button>
+                              <button onClick={downloadDocx}
+                                className="w-full text-left px-4 py-3 text-sm font-bold text-slate-700 hover:bg-blue-50 hover:text-blue-700 rounded-xl transition-colors flex items-center gap-3">
+                                <span className="text-xl">📘</span>
+                                <div>
+                                  <div>.docx (Word 문서)</div>
+                                  <div className="text-[10px] font-normal text-slate-400">표·이미지·제목 서식 포함</div>
+                                </div>
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
                     )}
                   </div>
                 </div>
 
-                {/* Page Results */}
+                {/* 페이지별 결과 */}
                 <div className="space-y-6">
                   {results.map((result) => (
-                    <div key={result.page} className="bg-white rounded-[2.5rem] shadow-2xl shadow-slate-200/70 border border-slate-100 overflow-hidden flex flex-col animate-in fade-in zoom-in-95 duration-500">
+                    <div key={result.page} className="bg-white rounded-[2.5rem] shadow-2xl shadow-slate-200/70 border border-slate-100 overflow-hidden flex flex-col">
                       <div className="bg-slate-50/80 px-7 py-4 border-b border-slate-100 flex items-center justify-between">
                         <span className="font-black text-slate-800 flex items-center text-sm uppercase tracking-wide">
                           <File className="w-4 h-4 mr-2.5 text-slate-400" />
                           PAGE {result.page}
                         </span>
-                        <div className="flex items-center">
+                        <div>
                           {result.status === 'extracting' && <span className="bg-amber-100 text-amber-700 px-3 py-1 rounded-full text-[10px] font-black uppercase flex items-center"><Loader2 className="w-3 h-3 mr-1.5 animate-spin" />Analysing</span>}
                           {result.status === 'translating' && <span className="bg-blue-100 text-blue-700 px-3 py-1 rounded-full text-[10px] font-black uppercase flex items-center"><Loader2 className="w-3 h-3 mr-1.5 animate-spin" />Translating</span>}
                           {result.status === 'done' && <span className="bg-green-100 text-green-700 px-3 py-1 rounded-full text-[10px] font-black uppercase flex items-center"><CheckCircle className="w-3 h-3 mr-1.5" />Finished</span>}
                           {result.status === 'error' && <span className="bg-red-100 text-red-700 px-3 py-1 rounded-full text-[10px] font-black uppercase flex items-center"><AlertCircle className="w-3 h-3 mr-1.5" />Failed</span>}
                         </div>
                       </div>
-                      
+
                       <div className="grid grid-cols-1 lg:grid-cols-2 divide-y lg:divide-y-0 lg:divide-x divide-slate-100">
-                        {/* Original Visual */}
+                        {/* 원본 */}
                         <div className="p-6 md:p-8 bg-slate-50/30">
                           <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] mb-6">Source (Original Page)</h4>
                           <div className="rounded-[2rem] overflow-hidden border-4 border-white bg-white shadow-2xl shadow-slate-300/50">
@@ -574,36 +1028,32 @@
                           </div>
                         </div>
 
-                        {/* Translation Content */}
+                        {/* 번역 결과 */}
                         <div className="p-6 md:p-8 bg-white relative">
                           <h4 className="text-[10px] font-black text-blue-500 uppercase tracking-[0.2em] mb-6">Translation (Korean)</h4>
-                          <div className="prose prose-slate prose-sm max-w-none break-words min-h-[150px]">
-                             {result.status === 'done' || result.status === 'error' ? (
-                               formatTranslatedText(result.translated, result.status)
-                             ) : (
-                               <div className="space-y-4 pt-4">
-                                 <div className="h-3.5 bg-slate-100 rounded-full w-full animate-pulse"></div>
-                                 <div className="h-3.5 bg-slate-100 rounded-full w-11/12 animate-pulse"></div>
-                                 <div className="h-3.5 bg-slate-100 rounded-full w-10/12 animate-pulse"></div>
-                                 <div className="h-3.5 bg-slate-100 rounded-full w-11/12 animate-pulse"></div>
-                                 <div className="h-3.5 bg-slate-100 rounded-full w-8/12 animate-pulse"></div>
-                               </div>
-                             )}
+                          <div className="min-h-[150px]">
+                            {result.status === 'done' || result.status === 'error' ? (
+                              formatTranslatedText(result.translated, result.status)
+                            ) : (
+                              <div className="space-y-4 pt-4">
+                                {[12, 11, 10, 11, 8].map((w, i) => (
+                                  <div key={i} className={`h-3.5 bg-slate-100 rounded-full w-${w}/12 animate-pulse`} />
+                                ))}
+                              </div>
+                            )}
                           </div>
                           <div className="hidden lg:flex absolute top-1/2 -left-3.5 -mt-3.5 w-7 h-7 bg-white border-2 border-slate-100 rounded-full items-center justify-center z-10 shadow-lg text-slate-300">
-                             <ChevronRight className="w-4 h-4" />
+                            <ChevronRight className="w-4 h-4" />
                           </div>
                         </div>
                       </div>
                     </div>
                   ))}
-                  
+
                   {!isProcessing && results.length > 0 && (
                     <div className="flex justify-center mt-12 mb-20">
-                      <button 
-                        onClick={handleReset}
-                        className="group flex items-center px-10 py-4 bg-white border-2 border-slate-200 text-slate-600 hover:text-slate-900 hover:border-slate-400 font-bold rounded-3xl transition-all shadow-sm active:scale-95"
-                      >
+                      <button onClick={handleReset}
+                        className="group flex items-center px-10 py-4 bg-white border-2 border-slate-200 text-slate-600 hover:text-slate-900 hover:border-slate-400 font-bold rounded-3xl transition-all shadow-sm active:scale-95">
                         <RefreshCw className="w-5 h-5 mr-3 text-slate-400 group-hover:rotate-180 transition-transform duration-700" />
                         초기 화면으로 돌아가기
                       </button>
@@ -617,25 +1067,33 @@
       );
     }
 
-    const root = createRoot(document.getElementById('root'));
-    root.render(<App />);
+    createRoot(document.getElementById('root')).render(<App />);
   </script>
 
   <style>
-    /* 스크롤바 디자인 */
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;900&family=Noto+Sans+KR:wght@400;500;700;900&display=swap');
+    body { font-family: 'Inter', 'Noto Sans KR', sans-serif; }
+
     ::-webkit-scrollbar { width: 8px; }
     ::-webkit-scrollbar-track { background: #f8fafc; }
     ::-webkit-scrollbar-thumb { background: #e2e8f0; border-radius: 10px; }
     ::-webkit-scrollbar-thumb:hover { background: #cbd5e1; }
-    
-    /* 폰트 보정 */
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;900&family=Noto+Sans+KR:wght@400;500;700;900&display=swap');
-    body { font-family: 'Inter', 'Noto Sans KR', sans-serif; }
-    
-    /* 마크다운 표 스타일 보정 */
+
+    /* 마크다운 표 스타일 */
     .prose table { border-collapse: collapse; width: 100%; margin: 1.5rem 0; border-radius: 0.75rem; overflow: hidden; font-size: 0.85rem; }
-    .prose th { background-color: #f1f5f9; padding: 0.75rem; font-weight: 700; border: 1px solid #e2e8f0; }
-    .prose td { padding: 0.75rem; border: 1px solid #e2e8f0; }
+    .prose th { background-color: #f1f5f9; padding: 0.75rem 1rem; font-weight: 700; border: 1px solid #e2e8f0; text-align: left; }
+    .prose td { padding: 0.75rem 1rem; border: 1px solid #e2e8f0; }
+    .prose tr:nth-child(even) td { background-color: #f8fafc; }
+
+    /* translation-content 내 prose 적용 */
+    .translation-content .prose table { font-size: 0.82rem; }
+    .translation-content .prose h1,
+    .translation-content .prose h2,
+    .translation-content .prose h3 { font-weight: 700; margin: 1rem 0 0.5rem; }
+    .translation-content .prose ul { list-style: disc; padding-left: 1.5rem; }
+    .translation-content .prose ol { list-style: decimal; padding-left: 1.5rem; }
+    .translation-content .prose p { margin: 0.5rem 0; }
+    .translation-content .prose strong { font-weight: 700; }
   </style>
 </body>
 </html>
