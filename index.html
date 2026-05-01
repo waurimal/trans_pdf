@@ -25,7 +25,7 @@
   <script type="text/babel" data-type="module">
     import React, { useState, useCallback, useRef } from 'https://esm.sh/react@18';
     import { createRoot } from 'https://esm.sh/react-dom@18/client';
-    import { Upload, FileText, Languages, Download, CheckCircle, AlertCircle, Loader2, File, ChevronRight, RefreshCw, Key, LogOut } from 'https://esm.sh/lucide-react@0.294.0';
+    import { Upload, FileText, Languages, Download, CheckCircle, AlertCircle, Loader2, File, ChevronRight, RefreshCw, Key, LogOut, Settings } from 'https://esm.sh/lucide-react@0.294.0';
 
     // --- 헬퍼 함수: AI가 알려준 좌표를 바탕으로 원본 이미지에서 그림만 잘라내기 ---
     const cropImageFromBase64 = (base64Str, y1, x1, y2, x2) => {
@@ -62,10 +62,11 @@
     function App() {
       const [userApiKey, setUserApiKey] = useState('');
       const [tempApiKey, setTempApiKey] = useState('');
-      // 기본 모델 설정
+      // 기본 모델 설정: gemini-1.5-flash는 v1beta에서 가장 안정적입니다.
       const [selectedModel, setSelectedModel] = useState('gemini-1.5-flash');
       const [tempModel, setTempModel] = useState('gemini-1.5-flash');
       const [isApiKeySet, setIsApiKeySet] = useState(false);
+      const [showManualModel, setShowManualModel] = useState(false);
 
       const [file, setFile] = useState(null);
       const [isProcessing, setIsProcessing] = useState(false);
@@ -76,16 +77,24 @@
       const fileInputRef = useRef(null);
 
       const domains = ['일반', 'IT/소프트웨어', '의학/보건', '법률/행정', '경제/경영', '기계/공학', '자연과학', '인문/예술', '교육학'];
+      const modelOptions = [
+        { id: 'gemini-1.5-flash', name: 'Gemini 1.5 Flash (추천)' },
+        { id: 'gemini-1.5-pro', name: 'Gemini 1.5 Pro (고성능)' },
+        { id: 'gemini-2.0-flash-exp', name: 'Gemini 2.0 Flash Exp (최신)' },
+        { id: 'gemini-2.5-flash-preview-09-2025', name: 'Gemini 2.5 Preview (Canvas전용)' }
+      ];
 
       const handleApiKeySubmit = (e) => {
         if (e) e.preventDefault();
         const key = tempApiKey.trim();
         setUserApiKey(key); 
         
+        // Canvas 내부 테스트가 아니고 키가 있다면 선택된 모델 사용
+        setSelectedModel(tempModel);
+        
+        // 만약 키가 비어있다면 Canvas 환경으로 간주하여 모델 강제 고정
         if (!key) {
           setSelectedModel('gemini-2.5-flash-preview-09-2025');
-        } else {
-          setSelectedModel(tempModel);
         }
         
         setIsApiKeySet(true);
@@ -93,10 +102,12 @@
       };
 
       const handleApiKeyReset = () => {
-        if (window.confirm("API 키를 초기화하시겠습니까?")) {
+        if (window.confirm("설정을 초기화하시겠습니까?")) {
           setUserApiKey('');
           setTempApiKey('');
           setIsApiKeySet(false);
+          setFile(null);
+          setResults([]);
         }
       };
 
@@ -106,8 +117,8 @@
         const delays = [1000, 2000, 4000, 8000, 16000];
         const base64Data = base64Image.split(',')[1];
         
-        // 모델에 따라 적절한 API 버전 선택 (v1beta는 실험적 모델에 필요)
-        const apiVersion = (selectedModel.includes('preview') || selectedModel.includes('exp')) ? 'v1beta' : 'v1';
+        // 대부분의 최신 기능(System Instruction 등)을 위해 v1beta를 사용합니다.
+        const apiVersion = 'v1beta';
         
         const contextPrompt = previousContext 
           ? `\n\n[이전 페이지 문맥 참고]\n이전 페이지의 마지막 번역 내용은 다음과 같습니다:\n"... ${previousContext}"\n\n*중요: 이전 페이지에서 문장이 마침표로 끝나지 않고 끊어졌다면, 현재 페이지의 첫 부분과 자연스럽게 연결하여 하나의 완성된 문장으로 번역하세요. 완성된 번역 결과는 현재 페이지 번역의 맨 처음에 위치하게 하세요.*`
@@ -125,12 +136,9 @@
                     { inlineData: { mimeType: "image/jpeg", data: base64Data } }
                   ] 
                 }],
-                // v1beta에서만 지원되는 systemInstruction 설정 (필요시)
-                ...(apiVersion === 'v1beta' && {
-                  systemInstruction: { 
-                    parts: [{ text: "You are a professional translator specializing in English to Korean translation. You accurately extract and translate text from document images while maintaining structural formatting like tables, and accurately bounding boxes for images." }] 
-                  }
-                })
+                systemInstruction: { 
+                  parts: [{ text: "You are a professional translator specializing in English to Korean translation. You accurately extract and translate text from document images while maintaining structural formatting like tables, and accurately bounding boxes for images." }] 
+                }
               })
             });
 
@@ -141,9 +149,6 @@
                 const errJson = JSON.parse(errText);
                 if (errJson.error && errJson.error.message) {
                   detailedError += `: ${errJson.error.message}`;
-                  if (detailedError.includes('404')) {
-                    detailedError += "\n(안내: 모델 이름을 찾을 수 없습니다. 모델 목록에서 다른 식별자를 선택하거나 API 키의 권한을 확인하세요.)";
-                  }
                 }
               } catch(e) { detailedError += ` - ${errText.substring(0, 100)}`; }
               throw new Error(detailedError);
@@ -215,7 +220,6 @@
             setProgressStatus(`페이지 ${i}/${numPages} 시각적 분석 중...`);
             
             const page = await pdf.getPage(i);
-            
             const viewport = page.getViewport({ scale: 2.0 });
             const canvas = document.createElement('canvas');
             const context = canvas.getContext('2d');
@@ -226,7 +230,7 @@
             const base64Image = canvas.toDataURL('image/jpeg', 0.8);
             
             setResults(prev => prev.map(r => r.page === i ? { ...r, originalImage: base64Image, status: 'translating' } : r));
-            setProgressStatus(`페이지 ${i}/${numPages} AI 전문 번역 및 이미지 삽입 중 (${domain})...`);
+            setProgressStatus(`페이지 ${i}/${numPages} AI 전문 번역 중 (${domain})...`);
 
             try {
               const translatedText = await translatePageImage(base64Image, domain, previousContext);
@@ -236,7 +240,7 @@
               console.error(`Page ${i} Error:`, err);
               setResults(prev => prev.map(r => r.page === i ? { 
                 ...r, 
-                translated: `[번역 실패]\n오류가 발생했습니다.\n상세 원인: ${err.message}`, 
+                translated: `[번역 실패]\n오류 원인: ${err.message}`, 
                 status: 'error' 
               } : r));
               previousContext = ""; 
@@ -246,7 +250,7 @@
           setProgressStatus('모든 처리가 완료되었습니다!');
         } catch (err) {
           console.error(err);
-          setError("PDF 파일을 처리하는 중 오류가 발생했습니다. 암호가 걸려있거나 손상된 파일일 수 있습니다.");
+          setError("PDF 처리에 실패했습니다. 파일이 손상되었거나 브라우저 메모리가 부족할 수 있습니다.");
         } finally {
           setIsProcessing(false);
         }
@@ -294,7 +298,7 @@
       };
 
       const formatTranslatedText = (text, status) => {
-        if (!text) return <span className="italic text-slate-400 font-normal text-slate-800">번역 결과가 없습니다.</span>;
+        if (!text) return <span className="italic text-slate-400 font-normal">번역 결과가 없습니다.</span>;
         
         const isError = status === 'error';
         const parts = text.split(/!\[(.*?)\]\((data:image\/[^)]+)\)/g);
@@ -308,16 +312,16 @@
             const alt = parts[i+1];
             const src = parts[i+2];
             elements.push(
-              <div key={`img-${i}`} className="my-5 border border-slate-200 rounded-xl overflow-hidden bg-slate-100 p-2 shadow-sm flex flex-col items-center w-full max-w-full">
-                <img src={src} alt={alt} className="max-w-full h-auto rounded-lg shadow-sm" />
-                {alt && <p className="text-center text-xs text-slate-500 mt-2 font-medium bg-white px-3 py-1 rounded-full shadow-sm">{alt}</p>}
+              <div key={`img-${i}`} className="my-5 border border-slate-200 rounded-xl overflow-hidden bg-slate-100 p-2 shadow-sm flex flex-col items-center w-full">
+                <img src={src} alt={alt} className="max-w-full h-auto rounded-lg" />
+                {alt && <p className="text-center text-xs text-slate-500 mt-2">{alt}</p>}
               </div>
             );
           }
         }
         
         return (
-          <div className={`whitespace-pre-wrap font-sans leading-relaxed text-[15px] ${isError ? 'text-red-600 font-medium' : 'text-slate-800'}`}>
+          <div className={`whitespace-pre-wrap font-sans leading-relaxed text-[15px] ${isError ? 'text-red-600' : 'text-slate-800'}`}>
             {elements}
           </div>
         );
@@ -334,75 +338,101 @@
                 </div>
                 <h1 className="text-3xl md:text-4xl font-bold text-slate-900 tracking-tight">PDF AI 번역기</h1>
               </div>
-              <p className="text-slate-500 max-w-2xl mx-auto">
-                영어 PDF 파일을 업로드하면 AI가 문맥을 파악하여 자연스러운 한국어로 번역해 줍니다.
+              <p className="text-slate-500 max-w-2xl mx-auto italic">
+                전문 분야 지식과 시각적 분석을 결합한 AI 번역 서비스
               </p>
             </div>
 
             {error && (
               <div className="bg-red-50 border border-red-200 text-red-700 p-4 rounded-xl flex items-center shadow-sm">
                 <AlertCircle className="w-5 h-5 mr-3 flex-shrink-0" />
-                <p className="whitespace-pre-wrap">{error}</p>
+                <p className="whitespace-pre-wrap text-sm">{error}</p>
               </div>
             )}
 
             {!file && (
               <div className="mt-8 space-y-6">
+                
+                {/* 1. API Key & Model Input */}
                 <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
                   <div className="w-full">
-                    <label className="block text-sm font-semibold text-slate-700 mb-2 flex items-center">
-                      <Key className="w-4 h-4 mr-2 text-blue-500" />
-                      1. API 키 및 모델 설정
-                    </label>
-                    <div className="text-xs text-slate-500 mb-4 p-3 bg-slate-50 rounded-xl space-y-1 border border-slate-100">
-                      <p>👉 <strong className="text-blue-600">GitHub 외부 배포 시:</strong> 본인의 API 키를 입력하고 <code>1.5 Flash</code>를 선택하세요.</p>
-                      <p>👉 <strong className="text-slate-500 italic text-[10px]">오류 발생 시:</strong> 모델 식별자를 다른 버전(예: 1.5 Flash Latest)으로 변경해 보세요.</p>
-                    </div>
-                    <form onSubmit={handleApiKeySubmit} className="flex flex-col md:flex-row gap-2">
-                      <input
-                        type="password"
-                        placeholder="API 키를 입력하세요"
-                        value={tempApiKey}
-                        onChange={(e) => setTempApiKey(e.target.value)}
-                        disabled={isApiKeySet}
-                        className="flex-1 px-4 py-2.5 text-sm rounded-xl border border-slate-300 focus:border-blue-500 focus:ring-2 focus:ring-blue-200 outline-none transition-all disabled:bg-slate-50 disabled:text-slate-400"
-                      />
-                      <select
-                        value={tempModel}
-                        onChange={(e) => setTempModel(e.target.value)}
-                        disabled={isApiKeySet}
-                        className="w-full md:w-56 px-3 py-2.5 text-sm rounded-xl border border-slate-300 focus:border-blue-500 focus:ring-2 focus:ring-blue-200 outline-none transition-all disabled:bg-slate-50 disabled:text-slate-400"
+                    <div className="flex items-center justify-between mb-2">
+                      <label className="text-sm font-semibold text-slate-700 flex items-center">
+                        <Key className="w-4 h-4 mr-2 text-blue-500" />
+                        1. API 설정
+                      </label>
+                      <button 
+                        onClick={() => setShowManualModel(!showManualModel)}
+                        className="text-[10px] text-slate-400 hover:text-blue-500 flex items-center"
                       >
-                        <option value="gemini-1.5-flash">gemini-1.5-flash (표준)</option>
-                        <option value="gemini-1.5-flash-latest">gemini-1.5-flash-latest (최신)</option>
-                        <option value="gemini-1.5-pro">gemini-1.5-pro (고품질)</option>
-                        <option value="gemini-1.5-pro-latest">gemini-1.5-pro-latest</option>
-                        <option value="gemini-2.0-flash-exp">gemini-2.0-flash-exp (실험적)</option>
-                        <option value="gemini-2.5-flash-preview-09-2025">gemini-2.5-flash-preview (Canvas)</option>
-                      </select>
-                      {!isApiKeySet ? (
-                        <button
-                          type="submit"
-                          className="px-6 py-2.5 bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold rounded-xl transition-colors shadow-sm whitespace-nowrap"
-                        >
-                          설정 저장
-                        </button>
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={handleApiKeyReset}
-                          className="px-6 py-2.5 border border-slate-200 text-slate-600 hover:bg-slate-100 text-sm font-semibold rounded-xl transition-colors shadow-sm whitespace-nowrap flex items-center justify-center"
-                        >
-                          <LogOut className="w-4 h-4 mr-1" />
-                          설정 변경
-                        </button>
+                        <Settings className="w-3 h-3 mr-1" />
+                        직접 모델명 입력 {showManualModel ? '끄기' : '켜기'}
+                      </button>
+                    </div>
+
+                    <form onSubmit={handleApiKeySubmit} className="space-y-3">
+                      <div className="flex flex-col md:flex-row gap-2">
+                        <input
+                          type="password"
+                          placeholder="Gemini API 키를 입력하세요 (AIzaSy...)"
+                          value={tempApiKey}
+                          onChange={(e) => setTempApiKey(e.target.value)}
+                          disabled={isApiKeySet}
+                          className="flex-1 px-4 py-2.5 text-sm rounded-xl border border-slate-300 focus:border-blue-500 outline-none transition-all disabled:bg-slate-50"
+                        />
+                        
+                        {showManualModel ? (
+                          <input
+                            type="text"
+                            placeholder="모델명 (예: gemini-1.5-flash)"
+                            value={tempModel}
+                            onChange={(e) => setTempModel(e.target.value)}
+                            disabled={isApiKeySet}
+                            className="w-full md:w-56 px-4 py-2.5 text-sm rounded-xl border border-blue-200 bg-blue-50 outline-none"
+                          />
+                        ) : (
+                          <select
+                            value={tempModel}
+                            onChange={(e) => setTempModel(e.target.value)}
+                            disabled={isApiKeySet}
+                            className="w-full md:w-56 px-3 py-2.5 text-sm rounded-xl border border-slate-300 focus:border-blue-500 outline-none transition-all disabled:bg-slate-50"
+                          >
+                            {modelOptions.map(opt => (
+                              <option key={opt.id} value={opt.id}>{opt.name}</option>
+                            ))}
+                          </select>
+                        )}
+
+                        {!isApiKeySet ? (
+                          <button
+                            type="submit"
+                            className="px-6 py-2.5 bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold rounded-xl transition-colors shadow-sm"
+                          >
+                            설정 완료
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={handleApiKeyReset}
+                            className="px-6 py-2.5 border border-slate-200 text-slate-600 hover:bg-slate-100 text-sm font-semibold rounded-xl transition-colors flex items-center justify-center"
+                          >
+                            <LogOut className="w-4 h-4 mr-1" />
+                            초기화
+                          </button>
+                        )}
+                      </div>
+                      {!isApiKeySet && (
+                        <p className="text-[10px] text-slate-400">
+                          * GitHub Pages 배포 환경에서는 반드시 유효한 API 키가 필요합니다. 모델 식별자가 맞지 않을 경우 404 오류가 발생할 수 있습니다.
+                        </p>
                       )}
                     </form>
                   </div>
                 </div>
 
+                {/* 2. Domain Selection */}
                 <div className={`bg-white p-6 rounded-3xl border border-slate-200 shadow-sm transition-opacity ${!isApiKeySet ? 'opacity-50 pointer-events-none' : ''}`}>
-                  <label className="block text-sm font-semibold text-slate-700 mb-3">2. 번역할 문서의 전문 분야 선택</label>
+                  <label className="block text-sm font-semibold text-slate-700 mb-3">2. 전문 분야 선택</label>
                   <div className="flex flex-wrap gap-2">
                     {domains.map(d => (
                       <button
@@ -420,8 +450,9 @@
                   </div>
                 </div>
 
+                {/* 3. File Upload Area */}
                 <div 
-                  className={`border-2 border-dashed bg-white rounded-3xl p-12 text-center transition-all duration-200 ease-in-out group shadow-sm ${
+                  className={`border-2 border-dashed bg-white rounded-3xl p-12 text-center transition-all duration-200 shadow-sm ${
                     !isApiKeySet 
                       ? 'border-slate-200 opacity-50 cursor-not-allowed' 
                       : 'border-slate-300 cursor-pointer hover:border-blue-500 hover:bg-blue-50'
@@ -438,14 +469,15 @@
                     onChange={(e) => e.target.files && handleFileUpload(e.target.files[0])}
                     disabled={!isApiKeySet}
                   />
-                  <div className={`w-20 h-20 mx-auto mb-6 rounded-full flex items-center justify-center transition-colors ${
-                    !isApiKeySet ? 'bg-slate-50' : 'bg-slate-100 group-hover:bg-blue-100'
+                  <div className={`w-16 h-16 mx-auto mb-4 rounded-full flex items-center justify-center ${
+                    !isApiKeySet ? 'bg-slate-50 text-slate-300' : 'bg-blue-50 text-blue-500 group-hover:scale-110 transition-transform'
                   }`}>
-                    <Upload className={`w-10 h-10 ${!isApiKeySet ? 'text-slate-300' : 'text-slate-400 group-hover:text-blue-600'}`} />
+                    <Upload className="w-8 h-8" />
                   </div>
-                  <h3 className="text-xl font-semibold text-slate-700 mb-2">
-                    {isApiKeySet ? '3. 클릭하거나 PDF 파일을 끌어다 놓으세요' : 'API 키를 먼저 설정해 주세요'}
+                  <h3 className="text-lg font-semibold text-slate-700 mb-1">
+                    {isApiKeySet ? '3. PDF 파일을 여기에 놓으세요' : '설정을 먼저 완료해 주세요'}
                   </h3>
+                  <p className="text-slate-400 text-xs">한 페이지씩 시각적으로 분석하여 표와 그림을 보존합니다.</p>
                 </div>
               </div>
             )}
@@ -459,71 +491,71 @@
                     </div>
                     <div className="flex-1 min-w-0">
                       <p className="font-semibold text-slate-800 truncate" title={file.name}>{file.name}</p>
-                      <p className="text-sm text-slate-500">{(file.size / 1024 / 1024).toFixed(2)} MB</p>
+                      <p className="text-xs text-slate-500">{(file.size / 1024 / 1024).toFixed(2)} MB • {selectedModel}</p>
                     </div>
                   </div>
 
                   <div className="flex items-center space-x-3 w-full sm:w-auto">
                     {isProcessing && (
-                      <div className="flex items-center text-blue-600 bg-blue-50 px-4 py-2 rounded-lg text-sm font-medium">
-                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      <div className="flex items-center text-blue-600 bg-blue-50 px-4 py-2 rounded-lg text-xs font-medium">
+                        <Loader2 className="w-3 h-3 mr-2 animate-spin" />
                         {progressStatus}
                       </div>
                     )}
                     {!isProcessing && results.length > 0 && (
                       <button 
                         onClick={downloadText}
-                        className="flex-1 sm:flex-none flex items-center justify-center px-5 py-2.5 bg-slate-900 text-white rounded-xl hover:bg-slate-800 transition-colors shadow-md text-sm font-medium"
+                        className="flex-1 sm:flex-none flex items-center justify-center px-5 py-2.5 bg-slate-900 text-white rounded-xl hover:bg-slate-800 text-sm font-medium shadow-sm transition-all active:scale-95"
                       >
                         <Download className="w-4 h-4 mr-2" />
-                        번역본 저장 (.md)
+                        번역 결과 (.md)
                       </button>
                     )}
                   </div>
                 </div>
 
-                <div className="space-y-4">
+                <div className="space-y-4 pb-20">
                   {results.map((result) => (
                     <div key={result.page} className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden flex flex-col">
                       <div className="bg-slate-50 px-5 py-3 border-b border-slate-200 flex items-center justify-between">
-                        <span className="font-semibold text-slate-700 flex items-center">
-                          <File className="w-4 h-4 mr-2 text-slate-400" />
+                        <span className="font-semibold text-slate-700 flex items-center text-sm">
+                          <File className="w-3.5 h-3.5 mr-2 text-slate-400" />
                           페이지 {result.page}
                         </span>
-                        <div className="flex items-center text-xs font-medium">
-                          {result.status === 'extracting' && <span className="text-amber-600 flex items-center"><Loader2 className="w-3 h-3 mr-1 animate-spin" />분석 중</span>}
-                          {result.status === 'translating' && <span className="text-blue-600 flex items-center"><Loader2 className="w-3 h-3 mr-1 animate-spin" />번역 중</span>}
-                          {result.status === 'done' && <span className="text-green-600 flex items-center"><CheckCircle className="w-3 h-3 mr-1" />완료</span>}
-                          {result.status === 'error' && <span className="text-red-600 flex items-center"><AlertCircle className="w-3 h-3 mr-1" />오류</span>}
+                        <div className="flex items-center text-[10px] font-bold tracking-tight">
+                          {result.status === 'extracting' && <span className="text-amber-500 uppercase">Analysing...</span>}
+                          {result.status === 'translating' && <span className="text-blue-500 uppercase">Translating...</span>}
+                          {result.status === 'done' && <span className="text-green-600 uppercase flex items-center"><CheckCircle className="w-3 h-3 mr-1" />Done</span>}
+                          {result.status === 'error' && <span className="text-red-500 uppercase flex items-center"><AlertCircle className="w-3 h-3 mr-1" />Error</span>}
                         </div>
                       </div>
                       
                       <div className="grid grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-slate-100">
-                        <div className="p-5 md:p-6 bg-slate-50/50">
-                          <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">Original</h4>
-                          <div className="rounded-xl overflow-hidden border border-slate-200 bg-white">
+                        <div className="p-4 md:p-6 bg-slate-50/30">
+                          <h4 className="text-[10px] font-bold text-slate-300 uppercase tracking-widest mb-4">Source View</h4>
+                          <div className="rounded-xl overflow-hidden border border-slate-200 bg-white shadow-sm">
                             {result.originalImage ? (
                               <img src={result.originalImage} alt={`Page ${result.page}`} className="w-full h-auto" />
                             ) : (
-                              <div className="h-64 flex items-center justify-center text-slate-300 italic text-sm">이미지 로딩 중...</div>
+                              <div className="h-64 flex items-center justify-center text-slate-300 italic text-xs">이미지 생성 중...</div>
                             )}
                           </div>
                         </div>
 
-                        <div className="p-5 md:p-6 bg-white relative">
-                          <h4 className="text-xs font-bold text-blue-500 uppercase tracking-wider mb-3">Translated</h4>
-                          <div className="prose prose-slate prose-sm max-w-none text-slate-800 break-words">
+                        <div className="p-4 md:p-6 bg-white relative">
+                          <h4 className="text-[10px] font-bold text-blue-400 uppercase tracking-widest mb-4">Korean (AI Translated)</h4>
+                          <div className="prose prose-slate prose-sm max-w-none break-words min-h-[100px]">
                              {result.status === 'done' || result.status === 'error' ? (
                                formatTranslatedText(result.translated, result.status)
                              ) : (
-                               <div className="flex flex-col space-y-2 animate-pulse">
-                                 <div className="h-4 bg-slate-100 rounded w-full"></div>
-                                 <div className="h-4 bg-slate-100 rounded w-5/6"></div>
-                                 <div className="h-4 bg-slate-100 rounded w-4/5"></div>
+                               <div className="space-y-3 pt-2">
+                                 <div className="h-3 bg-slate-100 rounded-full w-full animate-pulse"></div>
+                                 <div className="h-3 bg-slate-100 rounded-full w-5/6 animate-pulse"></div>
+                                 <div className="h-3 bg-slate-100 rounded-full w-4/5 animate-pulse"></div>
                                </div>
                              )}
                           </div>
-                          <div className="hidden md:flex absolute top-1/2 -left-3 -mt-3 w-6 h-6 bg-white border border-slate-200 rounded-full items-center justify-center z-10 shadow-sm text-slate-300">
+                          <div className="hidden md:flex absolute top-1/2 -left-3 -mt-3 w-6 h-6 bg-white border border-slate-200 rounded-full items-center justify-center z-10 shadow-sm text-slate-200">
                              <ChevronRight className="w-4 h-4" />
                           </div>
                         </div>
@@ -532,13 +564,13 @@
                   ))}
                   
                   {!isProcessing && results.length > 0 && (
-                    <div className="flex justify-center mt-8 pb-8">
+                    <div className="flex justify-center mt-12 pb-12">
                       <button 
                         onClick={handleReset}
-                        className="flex items-center px-6 py-3 bg-white border border-slate-300 text-slate-700 hover:bg-slate-50 font-semibold rounded-xl transition-colors shadow-sm"
+                        className="flex items-center px-8 py-3 bg-white border border-slate-200 text-slate-600 hover:text-slate-900 hover:border-slate-400 font-semibold rounded-2xl transition-all shadow-sm"
                       >
-                        <RefreshCw className="w-5 h-5 mr-2 text-slate-500" />
-                        새로운 파일 번역하기
+                        <RefreshCw className="w-4 h-4 mr-2" />
+                        초기 화면으로 돌아가기
                       </button>
                     </div>
                   )}
