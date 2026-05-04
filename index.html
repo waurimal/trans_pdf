@@ -69,7 +69,6 @@
       const [userApiKey, setUserApiKey] = useState('');
       const [tempApiKey, setTempApiKey] = useState('');
       
-      // ✅ 수정: 2025년 5월 기준 실제 사용 가능한 모델로 교체
       const [selectedModel, setSelectedModel] = useState('gemini-2.5-flash-preview-05-20');
       const [tempModel, setTempModel] = useState('gemini-2.5-flash-preview-05-20');
       const [isApiKeySet, setIsApiKeySet] = useState(false);
@@ -149,8 +148,6 @@
         }
 
         setUserApiKey(key);
-        // ✅ 수정: setSelectedModel은 위 try 블록에서 finalModel로 이미 설정됨
-        // 여기서 tempModel로 덮어쓰면 API 조회 결과가 무시되므로 제거
         setIsApiKeySet(true);
       };
 
@@ -165,8 +162,7 @@
         }
       };
 
-      // ✅ 번역 품질 개선: 강화된 프롬프트 + 정확한 API 엔드포인트
-      // modelId, apiKey를 인자로 받아 stale closure 문제 방지
+      // 번역 품질 개선: 강화된 프롬프트 + 정확한 API 엔드포인트
       const translatePageImage = async (base64Image, currentDomain, previousContext = "", modelId, apiKey, retries = 5) => {
         if (!base64Image) return '';
         const delays = [1000, 2000, 4000, 8000, 16000];
@@ -176,7 +172,6 @@
           ? `\n\n[이전 페이지 문맥]\n이전 페이지 마지막 내용: "... ${previousContext}"\n→ 위 내용과 자연스럽게 이어지도록 번역하세요. 페이지 경계에서 끊긴 문장은 이 페이지 맨 앞에서 완성해 주세요.`
           : "";
 
-        // ✅ 강화된 번역 프롬프트
         const translationPrompt = `아래 문서 이미지를 한국어로 번역해 주세요.
 
 [전문 분야: ${currentDomain}]${contextPrompt}
@@ -221,7 +216,7 @@
                   parts: [{ text: "You are an expert professional translator specializing in English-to-Korean translation of technical and academic documents. You reproduce document structure faithfully — including tables in markdown format, image position tags, headings, and paragraph breaks — while producing natural, precise Korean." }]
                 },
                 generationConfig: {
-                  temperature: 0.1,       // 번역 정확도 향상을 위해 낮은 temperature
+                  temperature: 0.1,
                   topP: 0.9,
                   maxOutputTokens: 8192,
                 }
@@ -277,7 +272,6 @@
             return translatedText;
           } catch (err) {
             if (i === retries - 1) throw err;
-            // 429 외 즉시 실패할 에러는 재시도 안 함
             if (err.message.includes('400') || err.message.includes('404')) throw err;
             await new Promise(resolve => setTimeout(resolve, delays[i]));
           }
@@ -296,7 +290,6 @@
         setProgressStatus('PDF 파일을 읽는 중입니다...');
 
         try {
-          // ✅ 수정: 함수 시작 시점에 state 값을 캡처 (stale closure 방지)
           const currentModel = selectedModel;
           const currentApiKey = userApiKey;
 
@@ -350,7 +343,6 @@
 
       const onDragOver = useCallback((e) => { e.preventDefault(); e.stopPropagation(); }, []);
 
-      // ✅ 수정: onDrop 의존성 배열에 handleFileUpload 관련 상태 추가
       const onDrop = useCallback((e) => {
         e.preventDefault();
         e.stopPropagation();
@@ -367,7 +359,6 @@
         setShowDownloadMenu(false);
       };
 
-      // ✅ 개선: 마크다운(.md) 다운로드
       const downloadMarkdown = () => {
         if (!results.length) return;
         let content = `# ${file.name} 번역 결과\n\n`;
@@ -378,7 +369,6 @@
         triggerDownload(content, `번역_${file.name.replace('.pdf', '')}.md`, 'text/markdown;charset=utf-8');
       };
 
-      // ✅ 신규: 순수 텍스트(.txt) 다운로드
       const downloadTxt = () => {
         if (!results.length) return;
         let content = `${file.name} 번역 결과\n`;
@@ -386,7 +376,6 @@
         content += '='.repeat(60) + '\n\n';
         results.forEach(r => {
           content += `[ 페이지 ${r.page} ]\n\n`;
-          // 이미지 태그 및 마크다운 문법 제거
           const plainText = r.translated
             .replace(/!\[.*?\]\(data:image[^)]+\)/g, '[그림]')
             .replace(/#{1,6}\s/g, '')
@@ -398,7 +387,6 @@
         triggerDownload(content, `번역_${file.name.replace('.pdf', '')}.txt`, 'text/plain;charset=utf-8');
       };
 
-      // ✅ 신규: HTML(.html) 다운로드 (표·이미지 완전 보존)
       const downloadHtml = () => {
         if (!results.length) return;
         const pagesHtml = results.map(r => {
@@ -436,7 +424,6 @@ ${pagesHtml}
         triggerDownload(html, `번역_${file.name.replace('.pdf', '')}.html`, 'text/html;charset=utf-8');
       };
 
-      // ✅ 신규: Word(.docx) 다운로드
       const downloadDocx = async () => {
         if (!results.length) return;
         const docx = window.docx;
@@ -451,7 +438,6 @@ ${pagesHtml}
           ShadingType, LevelFormat, PageBreak
         } = docx;
 
-        // base64 → Uint8Array 변환 (ImageRun 용)
         const base64ToUint8Array = (base64) => {
           const b64 = base64.split(',')[1];
           const bin = atob(b64);
@@ -460,7 +446,6 @@ ${pagesHtml}
           return arr;
         };
 
-        // 이미지 자연 크기 측정
         const getImageSize = (base64) => new Promise((resolve) => {
           const img = new Image();
           img.onload = () => resolve({ width: img.naturalWidth, height: img.naturalHeight });
@@ -468,7 +453,6 @@ ${pagesHtml}
           img.src = base64;
         });
 
-        // 마크다운 표 파싱 → docx Table
         const parseMarkdownTable = (lines) => {
           const rows = lines.filter(l => l.trim().startsWith('|') && !l.match(/^\|[-:\s|]+\|$/));
           if (rows.length === 0) return null;
@@ -507,7 +491,6 @@ ${pagesHtml}
           });
         };
 
-        // 텍스트 블록 → docx Paragraph 배열 변환
         const textToDocxChildren = async (text) => {
           const elements = [];
           const lines = text.split('\n');
@@ -529,7 +512,6 @@ ${pagesHtml}
           for (let i = 0; i < lines.length; i++) {
             const line = lines[i];
 
-            // 마크다운 표 감지
             if (line.trim().startsWith('|')) {
               inTable = true;
               tableBuffer.push(line);
@@ -537,7 +519,6 @@ ${pagesHtml}
             }
             if (inTable) flushTable();
 
-            // 이미지 태그
             const imgMatch = line.match(/!\[(.*?)\]\((data:image\/(jpeg|png);base64,[^)]+)\)/);
             if (imgMatch) {
               try {
@@ -545,7 +526,6 @@ ${pagesHtml}
                 const mimeType = imgMatch[3] === 'png' ? 'image/png' : 'image/jpeg';
                 const imgType = imgMatch[3] === 'png' ? 'png' : 'jpg';
                 const { width, height } = await getImageSize(src);
-                // 최대 너비 8800 EMU 기준으로 비율 맞춤 (A4 본문 약 16cm)
                 const maxEmuW = 5760000;
                 const ratio = Math.min(1, maxEmuW / (width * 9144));
                 const emuW = Math.round(width * 9144 * ratio);
@@ -570,7 +550,6 @@ ${pagesHtml}
               continue;
             }
 
-            // 제목 (# ## ###)
             const headingMatch = line.match(/^(#{1,3})\s+(.*)/);
             if (headingMatch) {
               const level = [HeadingLevel.HEADING_1, HeadingLevel.HEADING_2, HeadingLevel.HEADING_3][headingMatch[1].length - 1];
@@ -581,7 +560,6 @@ ${pagesHtml}
               continue;
             }
 
-            // 글머리 기호 (- * •)
             const bulletMatch = line.match(/^[-*•]\s+(.*)/);
             if (bulletMatch) {
               elements.push(new Paragraph({
@@ -591,7 +569,6 @@ ${pagesHtml}
               continue;
             }
 
-            // 번호 목록 (1. 2. ...)
             const numMatch = line.match(/^\d+\.\s+(.*)/);
             if (numMatch) {
               elements.push(new Paragraph({
@@ -601,13 +578,11 @@ ${pagesHtml}
               continue;
             }
 
-            // 빈 줄
             if (!line.trim()) {
               elements.push(new Paragraph({ children: [] }));
               continue;
             }
 
-            // 일반 텍스트 (**bold** 처리 포함)
             const runParts = line.split(/(\*\*.*?\*\*)/g);
             const runs = runParts.map(part => {
               const boldMatch = part.match(/^\*\*(.*)\*\*$/);
@@ -625,10 +600,8 @@ ${pagesHtml}
           return elements;
         };
 
-        // 문서 섹션 구성
         const sectionChildren = [];
 
-        // 표지
         sectionChildren.push(
           new Paragraph({
             heading: HeadingLevel.HEADING_1,
@@ -648,7 +621,6 @@ ${pagesHtml}
           new Paragraph({ children: [new PageBreak()] })
         );
 
-        // 페이지별 내용
         for (let i = 0; i < results.length; i++) {
           const r = results[i];
           sectionChildren.push(
@@ -731,7 +703,6 @@ ${pagesHtml}
         setShowDownloadMenu(false);
       };
 
-      // ✅ 개선: marked.js로 마크다운 렌더링 (표 포함)
       const formatTranslatedText = (text, status) => {
         if (!text) return <span className="italic text-slate-400">번역 결과가 없습니다.</span>;
 
@@ -739,7 +710,6 @@ ${pagesHtml}
           return <div className="whitespace-pre-wrap text-red-500 text-sm font-mono bg-red-50 p-4 rounded-xl">{text}</div>;
         }
 
-        // 이미지 자리 보존 후 marked 렌더링
         const parts = text.split(/(!\[.*?\]\(data:image\/[^)]+\))/g);
         return (
           <div className="translation-content font-sans leading-relaxed text-[15px] text-slate-800 space-y-1">
@@ -762,8 +732,8 @@ ${pagesHtml}
       };
 
       return (
-        <div className="min-h-screen p-4 md:p-8">
-          <div className="max-w-6xl mx-auto space-y-6">
+        <div className="min-h-screen flex flex-col p-4 md:p-8">
+          <div className="max-w-6xl w-full mx-auto space-y-6 flex-grow">
 
             {/* Header */}
             <div className="text-center space-y-3 mb-10">
@@ -937,7 +907,6 @@ ${pagesHtml}
                       </div>
                     )}
 
-                    {/* ✅ 개선: 다운로드 드롭다운 메뉴 */}
                     {!isProcessing && results.length > 0 && (
                       <div className="relative" ref={downloadMenuRef}>
                         <button
@@ -1051,7 +1020,7 @@ ${pagesHtml}
                   ))}
 
                   {!isProcessing && results.length > 0 && (
-                    <div className="flex justify-center mt-12 mb-20">
+                    <div className="flex justify-center mt-12 mb-10">
                       <button onClick={handleReset}
                         className="group flex items-center px-10 py-4 bg-white border-2 border-slate-200 text-slate-600 hover:text-slate-900 hover:border-slate-400 font-bold rounded-3xl transition-all shadow-sm active:scale-95">
                         <RefreshCw className="w-5 h-5 mr-3 text-slate-400 group-hover:rotate-180 transition-transform duration-700" />
@@ -1063,6 +1032,12 @@ ${pagesHtml}
               </div>
             )}
           </div>
+          
+          {/* 푸터 영역 추가 */}
+          <footer className="mt-auto pt-12 pb-4 text-center text-slate-400 text-[13px] font-medium leading-relaxed">
+            <p>만든이: 곽현석(waurimal@snuecse.org)</p>
+            <p>Copyright © WaurimaL. All Rights Reserved.</p>
+          </footer>
         </div>
       );
     }
